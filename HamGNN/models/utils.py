@@ -1,24 +1,21 @@
 """
 /*
- * @Author: Yang Zhong 
- * @Date: 2021-11-29 22:13:49 
+ * @Author: Yang Zhong
+ * @Date: 2021-11-29 22:13:49
  * @Last Modified by: Yang Zhong
  * @Last Modified time: 2021-11-29 22:26:42
  */
 """
-from torch_sparse import SparseTensor
 import torch
 import torch.nn as nn
 import numpy as np
-from torch.nn import (Linear, Bilinear, Sigmoid, Softplus, ELU, ReLU, SELU, SiLU,
-                      CELU, BatchNorm1d, ModuleList, Sequential, Tanh, BatchNorm1d as BN)
-from torch_geometric.nn.acts import swish
+from torch.nn import (Linear, Softplus, ELU, ReLU, SELU, SiLU,
+                      CELU, Sequential, Tanh, BatchNorm1d as BN)
+from torch_geometric.nn.resolver import swish
 from typing import Callable, Union
 import re
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
-from easydict import EasyDict
-from scipy.stats import gaussian_kde
 
 
 def linear_bn_act(in_features: int, out_features: int, lbias: bool = False, activation: Callable = None, use_batch_norm: bool = False):
@@ -229,7 +226,7 @@ def triplets(edge_index, nbr_shift, nbr_counts):
         idx_ji += j_j
         idx_k += [row_k[edge_kj]]*len(j_j)
         idx_j += [j]*len(j_j)
-        idx_i += col_i[j_j].tolist()      
+        idx_i += col_i[j_j].tolist()
 
     idx_k = torch.LongTensor(idx_k).type_as(edge_index)
     idx_j = torch.LongTensor(idx_j).type_as(edge_index)
@@ -248,7 +245,7 @@ def triplets(edge_index, nbr_shift, nbr_counts):
     """
     idx_i -> pos[idx_i]
     idx_j -> pos[idx_j] - nbr_shift[idx_ji]
-    idx_k -> pos[idx_k] - nbr_shift[idx_ji] - nbr_shift[idx_kj] 
+    idx_k -> pos[idx_k] - nbr_shift[idx_ji] - nbr_shift[idx_kj]
     """
-    
+
     return col_i, row_j, idx_i, idx_j, idx_k, idx_kj, idx_ji

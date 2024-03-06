@@ -1,6 +1,6 @@
 import numpy as np
 from typing import Union
-from typing import Tuple, Union, Optional, List, Set, Dict, Any
+from typing import Tuple, Union, List
 
 def _nice_float(x,just,rnd):
     return str(round(x,rnd)).rjust(just)
@@ -13,7 +13,7 @@ class kpoints_generator:
         self._dim_k = dim_k
         self._lat = lat
         # choose which self._dim_k out of self._dim_r dimensions are
-        # to be considered periodic.        
+        # to be considered periodic.
         if per==None:
             # by default first _dim_k dimensions are periodic
             self._per=list(range(self._dim_k))
@@ -22,29 +22,29 @@ class kpoints_generator:
                 raise Exception("\n\nWrong choice of periodic/infinite direction!")
             # store which directions are the periodic ones
             self._per=per
-        
+
     def k_path(self,kpts,nk,report=False):
         r"""
-    
+
         Interpolates a path in reciprocal space between specified
         k-points.  In 2D or 3D the k-path can consist of several
         straight segments connecting high-symmetry points ("nodes"),
         and the results can be used to plot the bands along this path.
-        
+
         The interpolated path that is returned contains as
         equidistant k-points as possible.
-    
+
         :param kpts: Array of k-vectors in reciprocal space between
           which interpolated path should be constructed. These
           k-vectors must be given in reduced coordinates.  As a
           special case, in 1D k-space kpts may be a string:
-    
+
           * *"full"*  -- Implies  *[ 0.0, 0.5, 1.0]*  (full BZ)
           * *"fullc"* -- Implies  *[-0.5, 0.0, 0.5]*  (full BZ, centered)
           * *"half"*  -- Implies  *[ 0.0, 0.5]*  (half BZ)
-    
+
         :param nk: Total number of k-points to be used in making the plot.
-        
+
         :param report: Optional parameter specifying whether printout
           is desired (default is True).
 
@@ -71,9 +71,9 @@ class kpoints_generator:
             node on the path in Cartesian coordinates.  This array is
             typically used to plot nodes (typically special points) on
             the path in k-space.
-    
+
         Example usage::
-    
+
           # Construct a path connecting four nodal points in k-space
           # Path will contain 401 k-points, roughly equally spaced
           path = [[0.0, 0.0], [0.0, 0.5], [0.5, 0.5], [0.0, 0.0]]
@@ -82,9 +82,9 @@ class kpoints_generator:
           evals = tb.solve_all(k_vec)
           # then use evals, k_dist, and k_node to plot bandstructure
           # (see examples)
-        
+
         """
-    
+
         # processing of special cases for kpts
         if kpts=='full':
             # full Brillouin zone for 1D case
@@ -97,7 +97,7 @@ class kpoints_generator:
             k_list=np.array([[0.],[0.5]])
         else:
             k_list=np.array(kpts)
-    
+
         # in 1D case if path is specified as a vector, convert it to an (n,1) array
         if len(k_list.shape)==1 and self._dim_k==1:
             k_list=np.array([k_list]).T
@@ -114,11 +114,11 @@ class kpoints_generator:
 
         # number of nodes
         n_nodes=k_list.shape[0]
-    
+
         # extract the lattice vectors from the TB model
         lat_per=np.copy(self._lat)
         # choose only those that correspond to periodic directions
-        lat_per=lat_per[self._per]    
+        lat_per=lat_per[self._per]
         # compute k_space metric tensor
         k_metric = np.linalg.inv(np.dot(lat_per,lat_per.T))
 
@@ -130,20 +130,20 @@ class kpoints_generator:
             dk = k_list[n]-k_list[n-1]
             dklen = np.sqrt(np.dot(dk,np.dot(k_metric,dk)))
             k_node[n]=k_node[n-1]+dklen
-    
+
         # Find indices of nodes in interpolated list
         node_index=[0]
         for n in range(1,n_nodes-1):
             frac=k_node[n]/k_node[-1]
             node_index.append(int(round(frac*(nk-1))))
         node_index.append(nk-1)
-    
+
         # initialize two arrays temporarily with zeros
         #   array giving accumulated k-distance to each k-point
         k_dist=np.zeros(nk,dtype=float)
-        #   array listing the interpolated k-points    
+        #   array listing the interpolated k-points
         k_vec=np.zeros((nk,self._dim_k),dtype=float)
-    
+
         # go over all kpoints
         k_vec[0]=k_list[0]
         for n in range(1,n_nodes):
@@ -157,7 +157,7 @@ class kpoints_generator:
                 frac=float(j-n_i)/float(n_f-n_i)
                 k_dist[j]=kd_i+frac*(kd_f-kd_i)
                 k_vec[j]=k_i+frac*(k_f-k_i)
-    
+
         np.set_printoptions(precision=5)
         if (lat_per.shape[0]==lat_per.shape[1]):
             # lat_per is invertible

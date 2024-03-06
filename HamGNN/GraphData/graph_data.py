@@ -1,26 +1,25 @@
 """
 /*
- * @Author: Yang Zhong 
- * @Date: 2021-10-07 20:44:01 
+ * @Author: Yang Zhong
+ * @Date: 2021-10-07 20:44:01
  * @Last Modified by: Yang Zhong
  * @Last Modified time: 2021-10-29 16:24:33
  */
 """
-import pytorch_lightning as pl
-from torch_geometric.data import Data
+import lightning as L
 from torch_geometric.loader import DataLoader
-from typing import Union, Callable
+from typing import Union
 import numpy as np
-from torch.utils.data import random_split, Subset
+from torch.utils.data import Subset
 import os
 
 """
 graph_data_module inherits pl.lightningDatamodule to implement the dataset class,
-which divides the dataset and builds the dataset loader.  
+which divides the dataset and builds the dataset loader.
 """
 
 
-class graph_data_module(pl.LightningDataModule):
+class graph_data_module(L.LightningDataModule):
     def __init__(self, dataset: Union[list, tuple, np.array] = None,
                  train_ratio: float = 0.6,
                  val_ratio: float = 0.2,

@@ -1,7 +1,7 @@
 """
 /*
- * @Author: Yang Zhong 
- * @Date: 2021-10-09 10:18:50 
+ * @Author: Yang Zhong
+ * @Date: 2021-10-09 10:18:50
  * @Last Modified by: Yang Zhong
  * @Last Modified time: 2021-10-28 20:19:52
  */
@@ -9,14 +9,11 @@
 import torch
 import torch.nn as nn
 from .utils import linear_bn_act
-from torch_geometric.data import Data, batch
-from torch.nn import (Linear, Bilinear, Sigmoid, Softplus, ELU, ReLU, SELU, SiLU,
-                      CELU, BatchNorm1d, ModuleList, Sequential, Tanh)
+from torch.nn import Linear, Softplus, ELU, ModuleList
 from typing import Callable
 import sympy as sym
 import math
 from torch_geometric.nn.models.dimenet_utils import real_sph_harm
-from torch_geometric.nn.acts import swish
 from torch.nn.init import xavier_uniform_
 from torch.nn.init import constant_
 from math import pi
@@ -26,10 +23,10 @@ zeros_initializer = partial(constant_, val=0.0)
 
 
 class denseLayer(nn.Module):
-    def __init__(self, in_features: int=None, out_features: int=None, bias:bool=True, 
+    def __init__(self, in_features: int=None, out_features: int=None, bias:bool=True,
                     use_batch_norm:bool=True, activation:callable=ELU()):
         super().__init__()
-        self.lba = linear_bn_act(in_features=in_features, out_features=out_features, lbias=bias, 
+        self.lba = linear_bn_act(in_features=in_features, out_features=out_features, lbias=bias,
                         activation=activation, use_batch_norm=use_batch_norm)
         self.linear = Linear(out_features, out_features, bias=bias)
     def forward(self, x):
@@ -37,11 +34,11 @@ class denseLayer(nn.Module):
         return out
 
 class denseRegression(nn.Module):
-    def __init__(self, in_features: int=None, out_features: int=None, bias:bool=True, 
+    def __init__(self, in_features: int=None, out_features: int=None, bias:bool=True,
                     use_batch_norm:bool=True, activation:callable=Softplus(), n_h:int=3):
         super().__init__()
         if n_h > 1:
-            self.fcs = nn.ModuleList([linear_bn_act(in_features=in_features, out_features=in_features, lbias=bias, 
+            self.fcs = nn.ModuleList([linear_bn_act(in_features=in_features, out_features=in_features, lbias=bias,
                         activation=activation, use_batch_norm=use_batch_norm) for _ in range(n_h-1)])
         self.fc_out = nn.Linear(in_features, out_features)
 
@@ -107,10 +104,10 @@ class MLPRegression(nn.Module):
     def __init__(self, num_in_features: int, num_out_features: int, num_mlp: int=3, lbias: bool = False,
                  activation: Callable = ELU(), use_batch_norm: bool = False):
         super(MLPRegression, self).__init__()
-        self.linear_regression = [linear_bn_act(int(num_in_features/2**(i-1)), int(num_in_features/2**i), 
+        self.linear_regression = [linear_bn_act(int(num_in_features/2**(i-1)), int(num_in_features/2**i),
                                    lbias, activation, use_batch_norm) for i in range(1, num_mlp)]
-        self.linear_regression += [linear_bn_act(int(num_in_features/2**(num_mlp-1)), num_out_features, 
-                                    lbias, activation, use_batch_norm)]                           
+        self.linear_regression += [linear_bn_act(int(num_in_features/2**(num_mlp-1)), num_out_features,
+                                    lbias, activation, use_batch_norm)]
         self.linear_regression = ModuleList(self.linear_regression)
 
     def forward(self, x):

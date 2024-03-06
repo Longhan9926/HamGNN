@@ -4,7 +4,7 @@ dataset_params:
   test_ratio: 0.1
   train_ratio: 0.8
   val_ratio: 0.1
-  graph_data_path: ./Examples/pentadiamond/ # Directory where graph_data.npz is located
+  graph_data_path: ./data/silicon # Directory where graph_data.npz is located
 
 losses_metrics:
   losses:
@@ -68,7 +68,7 @@ optim_params:
   lr_decay: 0.5
   lr_patience: 5
   gradient_clip_val: 0.0
-  max_epochs: 3000
+  max_epochs: 300
   min_epochs: 100
   stop_patience: 30
 
@@ -89,7 +89,7 @@ output_nets:
 
 profiler_params:
   progress_bar_refresh_rat: 1
-  train_dir: ./Examples/pentadiamond #The folder for saving training information and prediction results. This directory can be read by tensorboard to monitor the training process.
+  train_dir: ./data/silicon #The folder for saving training information and prediction results. This directory can be read by tensorboard to monitor the training process.
 
 representation_nets:
   # Network parameters usually do not need to be changed.
@@ -106,27 +106,27 @@ representation_nets:
     irreps_node_features: 32x0o+32x0e+32x1o+32x1e+32x2e+32x2o+32x3o+32x3e+32x4o+32x4e
     irreps_node_output: 32x0o+32x0e+32x1o+32x1e+32x2e+32x2o+32x3o+32x3e+32x4o+32x4e
     irreps_triplet_output: 32x0o+32x0e+32x1o+32x1e+32x2e+32x2o+32x3o+32x3e+32x4o+32x4e
-    invariant_layers: 2
-    invariant_neurons: 64
-    num_interaction_layers: 5
-    num_radial: 8
-    num_spherical: 8
+    invariant_layers: 1
+    invariant_neurons: 8
+    num_interaction_layers: 3
+    num_radial: 4
+    num_spherical: 4
     num_types: 60
     export_triplet: false
     rbf_func: bessel
     set_features: true
     add_edge_tp: false
     irreps_node_prev: 16x0o+16x0e+8x1o+8x1e+8x2e+8x2o+8x3o+8x3e+8x4o+8x4e
-    num_node_attr_feas: 64
+    num_node_attr_feas: 32
 
 setup:
   GNN_Net: HamGNN_pre
   accelerator: null
   ignore_warnings: true
-  checkpoint_path: ./network_weights_carbon.ckpt # Path to the model weights file
+  checkpoint_path: ./data/silicon/network_weights.ckpt # Path to the model weights file
   load_from_checkpoint: false
   resume: false
   num_gpus: null # null: use cpu; [i]: use the ith GPU device
   precision: 32
   property: hamiltonian
-  stage: test # fit: training; test: inference
+  stage: fit # fit: training; test: inference

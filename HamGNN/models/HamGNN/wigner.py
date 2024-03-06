@@ -1,25 +1,6 @@
 
-from numpy import zeros
 import torch
-import torch.nn as nn
-from torch_geometric.data import Data, batch
-from torch.nn import (Bilinear, Sigmoid, Softplus, ELU, ReLU, SELU, SiLU,
-                      CELU, BatchNorm1d, ModuleList, Sequential, Tanh)
-from ..utils import linear_bn_act
-from ..layers import denseRegression
-from torch_scatter import scatter
-import sympy as sym
 from e3nn import o3
-from e3nn.o3 import Linear
-from e3nn.nn import Gate, NormActivation
-from easydict import EasyDict
-from typing import Union
-from ..layers import GaussianSmearing, cuttoff_envelope, CosineCutoff, BesselBasis
-from .nequip.data import AtomicDataDict, AtomicDataset
-import math
-from ..PhiSNet.modules.clebsch_gordan import ClebschGordan
-import copy
-from typing import Dict, Callable
 
 def wigner(l, axis, angle):
     if l == 0:
@@ -36,5 +17,3 @@ def wigner(l, axis, angle):
     else:
         raise ValueError
     return w
-            
-        

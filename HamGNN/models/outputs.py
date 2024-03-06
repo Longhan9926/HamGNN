@@ -1,7 +1,7 @@
 """
 /*
-* @Author: Yang Zhong 
-* @Date: 2021-10-08 22:38:15 
+* @Author: Yang Zhong
+* @Date: 2021-10-08 22:38:15
  * @Last Modified by: Yang Zhong
  * @Last Modified time: 2021-11-07 10:54:51
 */
@@ -9,11 +9,8 @@
 
 import torch
 import torch.nn as nn
-from torch_geometric.data import Data, batch
-from torch.nn import (Linear, Bilinear, Sigmoid, Softplus, ELU, ReLU, SELU, SiLU,
-                      CELU, BatchNorm1d, ModuleList, Sequential, Tanh)
-from .utils import linear_bn_act
-from .layers import MLPRegression, denseRegression
+from torch.nn import Softplus
+from .layers import denseRegression
 from typing import Callable
 from torch_scatter import scatter
 from torch_geometric.nn import global_mean_pool, global_add_pool, global_max_pool
@@ -24,7 +21,7 @@ class Force(nn.Module):
                     use_bath_norm:bool=True, bias:bool=True, n_h:int=3):
         super(Force, self).__init__()
         self.num_edge_features = num_edge_features
-        self.regression_edge = denseRegression(in_features=num_edge_features, out_features=1, bias=bias, 
+        self.regression_edge = denseRegression(in_features=num_edge_features, out_features=1, bias=bias,
                                                 use_batch_norm=use_bath_norm, activation=activation, n_h=n_h)
 
     def forward(self, data, graph_representation: dict = None):
@@ -35,7 +32,7 @@ class Force(nn.Module):
         edge_dir = (pos[i]+nbr_shift) - pos[j] # j->i: ri-rj = rji
         edge_length = edge_dir.pow(2).sum(dim=-1).sqrt()
         edge_dir = edge_dir/edge_length.unsqueeze(-1)  # eji Shape(Nedges, 3)
-        
+
         force = self.regression_edge(edge_attr) * edge_dir  # mji*eji
         force = scatter(force, i, dim=0)
         return {'force': force} # shape (N_nodes, 3)
@@ -46,19 +43,19 @@ class Force_node_vec(nn.Module):
         super(Force_node_vec, self).__init__()
         self.num_node_features = num_node_features
         if self.num_node_features > 1:
-            self.regression_node = denseRegression(in_features=num_node_features, out_features=1, bias=bias, 
+            self.regression_node = denseRegression(in_features=num_node_features, out_features=1, bias=bias,
                                                 use_batch_norm=use_bath_norm, activation=activation, n_h=n_h)
 
     def forward(self, data, graph_representation: dict = None):
         node_attr = graph_representation['node_attr']
         node_vec_attr = graph_representation['node_vec_attr'] # shape: (N_nodes, 1, 3)
         basis = node_vec_attr.view(-1,3) # shape: (N_nodes, 3)
-        
+
         if self.num_node_features == 1:
             force = node_attr*basis
         else:
             force = self.regression_node(node_attr)*basis
-        return force     
+        return force
 
 class Born(nn.Module):
     def __init__(self, include_triplet:bool=True, num_node_features:int=None, num_edge_features:int=None, num_triplet_features:int=None, activation:callable=Softplus(),
@@ -69,11 +66,11 @@ class Born(nn.Module):
         self.include_triplet = include_triplet
         self.cutoff_triplet = cutoff_triplet
         self.l_minus_mean = l_minus_mean
-        self.regression_edge = denseRegression(in_features=num_edge_features, out_features=1, bias=bias, 
+        self.regression_edge = denseRegression(in_features=num_edge_features, out_features=1, bias=bias,
                                                 use_batch_norm=use_bath_norm, activation=activation, n_h=n_h)
         if self.include_triplet:
             self.num_triplet_features = num_triplet_features
-            self.regression_triplet = denseRegression(in_features=num_triplet_features, out_features=1, bias=bias, 
+            self.regression_triplet = denseRegression(in_features=num_triplet_features, out_features=1, bias=bias,
                                                     use_batch_norm=use_bath_norm, activation=activation, n_h=n_h)
 
     def forward(self, data, graph_representation: dict = None):
@@ -89,7 +86,7 @@ class Born(nn.Module):
         edge_dir = (pos[i]+nbr_shift) - pos[j] # j->i: ri-rj = rji
         edge_length = edge_dir.pow(2).sum(dim=-1).sqrt()
         edge_dir = edge_dir/edge_length.unsqueeze(-1)  # eji Shape(Nedges, 3)
-        
+
         dyad_ji_ji = edge_dir.unsqueeze(-1)@edge_dir.unsqueeze(1)
         dyad_ji_ji = dyad_ji_ji.view(-1, 9)
         temp_sym = self.regression_edge(edge_attr) * dyad_ji_ji  # mji*eji@eji
@@ -115,7 +112,7 @@ class Born_node_vec(nn.Module):
         super(Born_node_vec, self).__init__()
         self.num_node_features = num_node_features
         if self.num_node_features > 1:
-            self.regression_node = denseRegression(in_features=num_node_features, out_features=1, bias=bias, 
+            self.regression_node = denseRegression(in_features=num_node_features, out_features=1, bias=bias,
                                                 use_batch_norm=use_bath_norm, activation=activation, n_h=n_h)
 
     def forward(self, data, graph_representation: dict = None):
@@ -123,12 +120,12 @@ class Born_node_vec(nn.Module):
         node_vec_attr = graph_representation['node_vec_attr'] # shape: (N_nodes, 2, 3)
         basis = node_vec_attr[:,0,:].unsqueeze(-1)@node_vec_attr[:,1,:].unsqueeze(1) # shape: (N_nodes, 3, 3)
         basis = basis.view(-1,9) # shape: (N_nodes, 9)
-        
+
         if self.num_node_features == 1:
             born = node_attr*basis
         else:
             born = self.regression_node(node_attr)*basis
-        return born      
+        return born
 
 """
 class piezoelectric(nn.Module):
@@ -237,7 +234,7 @@ class scalar(nn.Module):
         self.aggr = aggr
         self.classification = classification
         self.activation = activation
-        
+
         if n_h > 1:
             self.fcs = nn.ModuleList([nn.Linear(num_node_features, num_node_features)
                                       for _ in range(n_h-1)])
@@ -283,7 +280,7 @@ class crystal_tensor(nn.Module):
         super(crystal_tensor, self).__init__()
         self.l_pred_atomwise_tensor = l_pred_atomwise_tensor
         self.atom_tensor_output = Born(include_triplet, num_node_features, num_edge_features, num_triplet_features, activation, use_bath_norm, bias, n_h, cutoff_triplet, l_minus_mean)
-    
+
     def forward(self, data, graph_representation: dict = None):
         atom_tensors = self.atom_tensor_output(data, graph_representation)
         if self.l_pred_atomwise_tensor:
@@ -297,10 +294,10 @@ class total_energy_and_atomic_forces(nn.Module):
         super().__init__()
         self.derivative = derivative # Set the gradient of data.pos in Model
         #self.energy = scalar(aggr='sum', classification=False, num_node_features=num_node_features, n_h=n_h, activation=activation)
-        
+
         self.atom_regression = denseRegression(in_features=num_node_features, out_features=1, bias=True,
                                                use_batch_norm=False, activation=activation, n_h=n_h)
-    
+
     def forward(self, data, graph_representation: dict = None):
         #energy = self.energy(data, graph_representation)['scalar']
         atomic_energy = self.atom_regression(graph_representation.node_attr)
@@ -318,8 +315,8 @@ class EPC_output():
         self.representation = representation
         self.output = output
         self.band_win_min = band_win_min
-        self.band_win_max = band_win_max        
-        
+        self.band_win_max = band_win_max
+
     def  __call__(self, data):
         out = self.forward(data)
         return out
@@ -327,7 +324,7 @@ class EPC_output():
     def forward(self, data):
         Nbatch = data.cell.shape[0]
         natoms = int(len(data.z)/Nbatch) # The number of atoms in each crystal must be equal, otherwise batch_size can only be 1.
-        
+
         # 初始化orb2atom_idx
         atomic_nums = data.z.view(-1, natoms) # shape: [Nbatch, natoms]
         orb2atom_idx  = []
@@ -337,12 +334,12 @@ class EPC_output():
                 repeats.append(len(self.output.basis_def[atomic_nums[ib][ia].item()]))
             repeats = torch.LongTensor(repeats)
             orb2atom_idx.append(torch.repeat_interleave(torch.arange(natoms), repeats, dim=0).type_as(atomic_nums))
-        
+
         # 计算namd mat
         # 计算nabla_{R}(HK)
         data = data
         HK, SK, wavefunction, hamiltonian, dSK = None,None,None,None,None
-        
+
         def wrapper(pos: torch.Tensor) -> torch.Tensor:
             nonlocal data, HK, SK, wavefunction, hamiltonian, dSK
             data.pos = pos
@@ -350,52 +347,52 @@ class EPC_output():
             out = self.output(data, graph_representation)
             HK, SK, wavefunction, hamiltonian, dSK = out['HK'], out['SK'], out['wavefunction'], out['hamiltonian'], out['dSK']
             return HK
-        
-        with torch.autograd.detect_anomaly():          
+
+        with torch.autograd.detect_anomaly():
             # shape: [Nbatch, num_k, norbs, norbs, natoms, 3]
             nabla_HK = torch.autograd.functional.jacobian(func=wrapper, inputs=data.pos, create_graph=False, vectorize=False)
 
         norbs = HK.shape[-1]
         m = torch.arange(0, norbs)
-           
+
         wavefunction = wavefunction[:,:,self.band_win_min-1:self.band_win_max,:]
         wavefunction_conj = torch.conj(wavefunction)
-        
+
         # method 1 for faster speed
         """
         epc_mat = []
-        for idx in range(Nbatch):        
+        for idx in range(Nbatch):
             #nabla_SK1 = nabla_SK[idx,:,:,m,orb2atom_idx[idx][m],:].type_as(HK) # shape:[num_k, norbs, norbs, 3]
             #nabla_SK2 = nabla_SK[idx,:,n,:,orb2atom_idx[idx][n],:].type_as(HK) # shape:[norbs, num_k, norbs, 3]
             #nabla_SK2 = torch.swapaxes(nabla_SK2, axis0=0, axis1=1) # shape:[num_k, norbs, norbs, 3]
-            
+
             nabla_SK1 = torch.zeros_like(nabla_SK, dtype=HK.dtype)
             nabla_SK1[idx,:,:,m,orb2atom_idx[idx][m],:] = nabla_SK[idx,:,:,m,orb2atom_idx[idx][m],:].type_as(HK)
-            
+
             nabla_SK2 = torch.zeros_like(nabla_SK, dtype=HK.dtype)
             nabla_SK2[idx,:,n,:,orb2atom_idx[idx][n],:] = nabla_SK[idx,:,n,:,orb2atom_idx[idx][n],:].type_as(HK)
-            
+
             sum1 = 'abd, ace, afghi, adf, age -> abchi'
             part1 = torch.einsum(sum1, torch.conj(wavefunction[idx]), wavefunction[idx], nabla_HK[idx], SK[idx], SK[idx])
-            
+
             sum2 = 'abd, ace, afg, adfhi, age -> abchi'
             part2 = torch.einsum(sum2, torch.conj(wavefunction[idx]), wavefunction[idx], HK[idx], nabla_SK1[idx], SK[idx])
-            
+
             sum3 = 'abd, ace, afg, adf, agehi -> abchi'
             part3 = torch.einsum(sum3, torch.conj(wavefunction[idx]), wavefunction[idx], HK[idx], SK[idx], nabla_SK2[idx])
-            
+
             epc_mat.append(part1 + part2 + part3)
-        
+
         epc_mat = torch.cat(epc_mat, dim=0)
         """
         # method 2 for less memory overhead
         epc_mat_batch = []
-        for idx in range(Nbatch): 
-            epc_mat = []     
-                  
+        for idx in range(Nbatch):
+            epc_mat = []
+
             nabla_SK = torch.zeros_like(nabla_HK, dtype=HK.dtype)
             nabla_SK[idx,:,:,m,orb2atom_idx[idx][m],:] = dSK[idx]
-            
+
             for b in range(wavefunction.shape[-2]):
                 for c in range(wavefunction.shape[-2]):
                     temp_sum = []
@@ -403,21 +400,21 @@ class EPC_output():
                         for e in range(norbs):
                             sum1 = 'a, a, afghi, af, ag -> ahi'
                             part1 = torch.einsum(sum1, torch.conj(wavefunction_conj[idx,:,b,d]), wavefunction[idx,:,c,e], nabla_HK[idx], SK[idx,:,d,:], SK[idx,:,:,e])
-            
+
                             sum2 = 'a, a, afg, afhi, ag -> ahi'
                             part2 = torch.einsum(sum2, torch.conj(wavefunction_conj[idx,:,b,d]), wavefunction[idx,:,c,e], HK[idx], nabla_SK[idx,:,d,:,:,:], SK[idx,:,:,e])
-            
+
                             sum3 = 'a, a, afg, af, aghi -> ahi'
                             part3 = torch.einsum(sum3, torch.conj(wavefunction_conj[idx,:,b,d]), wavefunction[idx,:,c,e], HK[idx], SK[idx,:,d,:], nabla_SK[idx,:,e,:,:,:])
-            
+
                             temp_sum.append(part1 + part2 + part3)
-                    # sum over d and e        
+                    # sum over d and e
                     temp_sum = torch.sum(torch.stack(temp_sum, dim=0), dim=0)
                     epc_mat.append(temp_sum) # shape: [num_k, natoms, 3]
-                    
+
             epc_mat = torch.stack(epc_mat, dim=1).reshape(-1, wavefunction.shape[-2], wavefunction.shape[-2], natoms, 3)
             epc_mat_batch.append(epc_mat)
         epc_mat = torch.stack(epc_mat_batch, dim=0) # shape: [Nbatch, num_k, norbs, norbs, natoms, 3]
-        
-        
+
+
         return {'hamiltonian':hamiltonian, 'epc_mat': epc_mat}

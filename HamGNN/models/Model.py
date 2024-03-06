@@ -1,24 +1,22 @@
 """
 /*
- * @Author: Yang Zhong 
- * @Date: 2021-10-09 13:46:53 
+ * @Author: Yang Zhong
+ * @Date: 2021-10-09 13:46:53
  * @Last Modified by: Yang Zhong
  * @Last Modified time: 2021-10-29 21:09:02
  */
 """
-import pytorch_lightning as pl
+import lightning as L
 import torch
 import torch.nn as nn
 import torch.optim as opt
-from typing import List, Dict, Union
-from torch.nn import functional as F
+from typing import List, Dict
 from .utils import scatter_plot
 import numpy as np
 import os
-import pandas as pd
 
 
-class Model(pl.LightningModule):
+class Model(L.LightningModule):
     def __init__(
             self,
             representation: nn.Module,
@@ -48,12 +46,12 @@ class Model(pl.LightningModule):
         self.lr_decay = lr_decay
         self.lr_patience = lr_patience
         self.lr_monitor = lr_monitor
-        
+
         self.epsilon = epsilon
         self.beta1 = beta1
         self.beta2 = beta2
         self.amsgrad = amsgrad
-        
+
         self.max_points_to_scatter = max_points_to_scatter
         # post_processing is used to calculate some physical quantities that rely on gradient backpropagation
         self.post_processing = post_processing
@@ -103,6 +101,11 @@ class Model(pl.LightningModule):
         # self.check_param()
         return loss
 
+    def on_validation_epoch_start(self) -> None:
+        super().on_validation_epoch_start()
+        self.val_output_list = []
+        return
+
     def validation_step(self, data, batch_idx):
         if self.requires_dr:
             torch.set_grad_enabled(True)
@@ -117,17 +120,18 @@ class Model(pl.LightningModule):
         self.log_metrics(data, pred, 'validation')
         outputs_pred, outputs_target = {}, {}
         for loss_dict in self.losses:
-            outputs_pred[loss_dict["prediction"]] = pred[loss_dict["prediction"]].detach().cpu().numpy()  
-            outputs_target[loss_dict["target"]] = data[loss_dict["target"]].detach().cpu().numpy()      
-        return {'pred': outputs_pred, 'target': outputs_target}
+            outputs_pred[loss_dict["prediction"]] = pred[loss_dict["prediction"]].detach().cpu().numpy()
+            outputs_target[loss_dict["target"]] = data[loss_dict["target"]].detach().cpu().numpy()
+        # return {'pred': outputs_pred, 'target': outputs_target}
+        self.val_output_list += [{'pred': outputs_pred, 'target': outputs_target}]
 
-    def validation_epoch_end(self, validation_step_outputs):
+    def on_validation_epoch_end(self):
         for loss_dict in self.losses:
             if "target" in loss_dict.keys():
                 pred = np.concatenate([out['pred'][loss_dict["prediction"]]
-                                 for out in validation_step_outputs])
+                                 for out in self.val_output_list])
                 target = np.concatenate([out['target'][loss_dict["target"]]
-                                    for out in validation_step_outputs])
+                                    for out in self.val_output_list])
                 if (pred.dtype == np.complex64) and (target.dtype == np.complex64):
                     lossname = type(loss_dict['metric']).__name__.split(".")[-1]
                     if lossname.lower() == 'abs_mae':
@@ -149,13 +153,18 @@ class Model(pl.LightningModule):
             else:
                 pass
 
+    def on_test_epoch_start(self) -> None:
+        super().on_test_epoch_start()
+        self.test_output_list = []
+        return
+
     def test_step(self, data, batch_idx):
         if self.requires_dr:
             torch.set_grad_enabled(True)
         else:
             torch.set_grad_enabled(False)
         self._enable_grads(data)
-        
+
         if self.post_processing is not None:
             pred = self.post_processing(data)
             if type(self.post_processing).__name__.split(".")[-1].lower() == 'epc_output':
@@ -165,32 +174,33 @@ class Model(pl.LightningModule):
         else:
             pred = self(data)
             proessed_values = None
-            
+
         loss = self.calculate_loss(data, pred, 'test').detach().item()
         self.log("test/total_loss", loss, on_step=False, on_epoch=True)
-        self.log_metrics(data, pred, "test") 
+        self.log_metrics(data, pred, "test")
         outputs_pred, outputs_target = {}, {}
         for loss_dict in self.losses:
-            outputs_pred[loss_dict["prediction"]] = pred[loss_dict["prediction"]].detach().cpu().numpy()  
-            outputs_target[loss_dict["target"]] = data[loss_dict["target"]].detach().cpu().numpy()      
-        return {'pred': outputs_pred, 'target': outputs_target, 'processed_values': proessed_values}
+            outputs_pred[loss_dict["prediction"]] = pred[loss_dict["prediction"]].detach().cpu().numpy()
+            outputs_target[loss_dict["target"]] = data[loss_dict["target"]].detach().cpu().numpy()
+        # return {'pred': outputs_pred, 'target': outputs_target, 'processed_values': proessed_values}
+        self.test_output_list.append({'pred': outputs_pred, 'target': outputs_target, 'processed_values': proessed_values})
 
-    def test_epoch_end(self, test_step_outputs):
+    def on_test_epoch_end(self):
         for loss_dict in self.losses:
             if "target" in loss_dict.keys():
                 pred = np.concatenate([out['pred'][loss_dict["prediction"]]
-                                 for out in test_step_outputs])
+                                 for out in self.test_output_list])
                 target = np.concatenate([out['target'][loss_dict["target"]]
-                                    for out in test_step_outputs])
-                
+                                    for out in self.test_output_list])
+
                 if not os.path.exists(self.trainer.logger.log_dir):
                     os.makedirs(self.trainer.logger.log_dir)
-                    
+
                 np.save(os.path.join(
                     self.trainer.logger.log_dir, 'prediction_'+loss_dict["prediction"]+'.npy'), pred)
                 np.save(os.path.join(self.trainer.logger.log_dir,
                         'target_'+loss_dict["target"]+'.npy'), target)
-                
+
                 # plot
                 if (pred.dtype == np.complex64) and (target.dtype == np.complex64):
                     lossname = type(loss_dict['metric']).__name__.split(".")[-1]
@@ -200,28 +210,28 @@ class Model(pl.LightningModule):
                     else:
                         pred = np.concatenate([pred.real, pred.imag], axis=-1)
                         target = np.concatenate([target.real, target.imag], axis=-1)
-                
+
                 # Control the number of scatter points to plot
                 if pred.size > self.max_points_to_scatter:
                     random_state = np.random.RandomState(seed=42)
                     perm = list(random_state.permutation(np.arange(pred.size)))
                     pred = pred.reshape(-1)[perm[:self.max_points_to_scatter]]
                     target = target.reshape(-1)[perm[:self.max_points_to_scatter]]
-                    
+
                 figure = scatter_plot(pred.reshape(-1), target.reshape(-1))
                 figname = 'PredVSTarget_' + loss_dict['prediction']
                 self.logger.experiment.add_figure(
                     'test/'+figname, figure, global_step=self.global_step)
             else:
                 pass
-        
+
         if self.post_processing is not None:
             if type(self.post_processing).__name__.split(".")[-1].lower() == 'epc_output':
                 processed_values = np.concatenate([out['processed_values']["epc_mat"]
-                                        for out in test_step_outputs])
+                                        for out in self.test_output_list])
                 np.save(os.path.join(
                     self.trainer.logger.log_dir, 'processed_values_'+'epc_mat'+'.npy'), processed_values)
-            
+
     def forward(self, data):
         # torch.set_grad_enabled(True)
         self._enable_grads(data)

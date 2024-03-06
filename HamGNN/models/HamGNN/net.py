@@ -1,27 +1,19 @@
 
 
-from numpy import zeros
 import torch
 import torch.nn as nn
-from torch_geometric.data import Data, batch
-from torch.nn import (Bilinear, Sigmoid, Softplus, ELU, ReLU, SELU, SiLU,
-                      CELU, BatchNorm1d, ModuleList, Sequential, Tanh, Identity)
-from ..utils import linear_bn_act
-from ..layers import denseRegression
 from torch_scatter import scatter
-import sympy as sym
 from e3nn import o3
 from e3nn.o3 import Linear
 from e3nn.nn import FullyConnectedNet
-from e3nn.o3 import TensorProduct, Linear, FullyConnectedTensorProduct
+from e3nn.o3 import TensorProduct, Linear
 from e3nn.nn import Gate, NormActivation
 from easydict import EasyDict
 from typing import Union
 from ..layers import GaussianSmearing, cuttoff_envelope, CosineCutoff, BesselBasis, sph_harm_layer
-from .nequip.data import AtomicDataDict, AtomicDataset
+from .nequip.data import AtomicDataDict
 import math
 from .clebsch_gordan import ClebschGordan
-from e3nn.o3._wigner import _so3_clebsch_gordan
 import copy
 from typing import Dict, Callable
 from .nequip.nn.nonlinearities import ShiftedSoftPlus
@@ -43,9 +35,7 @@ acts = {
 
 from .nequip.nn import (
     GraphModuleMixin,
-    SequentialGraphNetwork,
     AtomwiseLinear,
-    AtomwiseReduce,
     ConvNetLayer,
 )
 from .nequip.nn.embedding import (
@@ -143,11 +133,11 @@ class residual_block(torch.nn.Module):
             )
 
         self.equivariant_nonlin = equivariant_nonlin
-        
+
         self.linear1 = Linear(
             irreps_in=self.irreps_in, irreps_out=linear_irreps_out
         )
-        
+
         self.linear2 = Linear(
             irreps_in=self.equivariant_nonlin.irreps_out, irreps_out=irreps_in
         )
@@ -196,10 +186,10 @@ class Edge_builder(GraphModuleMixin, torch.nn.Module):
             },
             irreps_out={AtomicDataDict.EDGE_FEATURES_KEY: irreps_out},
         )
-        
+
         irreps_node_fea = self.irreps_in[AtomicDataDict.NODE_FEATURES_KEY]
-        irreps_edge_attr = self.irreps_in[AtomicDataDict.EDGE_ATTRS_KEY]   
-        feature_irreps_out = self.irreps_out[AtomicDataDict.EDGE_FEATURES_KEY]     
+        irreps_edge_attr = self.irreps_in[AtomicDataDict.EDGE_ATTRS_KEY]
+        feature_irreps_out = self.irreps_out[AtomicDataDict.EDGE_FEATURES_KEY]
 
         # - Build modules -
         self.linear_node_src = Linear(
@@ -208,7 +198,7 @@ class Edge_builder(GraphModuleMixin, torch.nn.Module):
             internal_weights=True,
             shared_weights=True,
         )
-        
+
         self.linear_node_dst = Linear(
             irreps_in=irreps_node_fea,
             irreps_out=irreps_node_fea,
@@ -265,7 +255,7 @@ class Edge_builder(GraphModuleMixin, torch.nn.Module):
         )
 
     def forward(self, data: AtomicDataDict.Type) -> AtomicDataDict.Type:
-        
+
         weight = self.fc(data[AtomicDataDict.EDGE_EMBEDDING_KEY])
 
         x = data[AtomicDataDict.NODE_FEATURES_KEY]
@@ -273,18 +263,18 @@ class Edge_builder(GraphModuleMixin, torch.nn.Module):
         edge_dst = data[AtomicDataDict.EDGE_INDEX_KEY][0] # j
 
         x_ij = self.linear_node_src(x[edge_src]) + self.linear_node_dst(x[edge_dst])
-        
+
         edge_features = self.tp(
             x_ij, data[AtomicDataDict.EDGE_ATTRS_KEY], weight
         )
 
         edge_features = self.linear_edge(edge_features)
-        
+
         data[AtomicDataDict.EDGE_FEATURES_KEY] = edge_features
         return data
 
 class Edge_builder_tp(GraphModuleMixin, torch.nn.Module):
-    
+
     def __init__(
         self,
         irreps_in,
@@ -316,9 +306,9 @@ class Edge_builder_tp(GraphModuleMixin, torch.nn.Module):
             },
             irreps_out={AtomicDataDict.EDGE_FEATURES_KEY: irreps_out},
         )
-        
+
         irreps_node_fea = self.irreps_in[AtomicDataDict.NODE_FEATURES_KEY]
-        feature_irreps_out = self.irreps_out[AtomicDataDict.EDGE_FEATURES_KEY]     
+        feature_irreps_out = self.irreps_out[AtomicDataDict.EDGE_FEATURES_KEY]
 
         # - Build modules -
         self.linear_node_src = Linear(
@@ -327,12 +317,12 @@ class Edge_builder_tp(GraphModuleMixin, torch.nn.Module):
             internal_weights=True,
             shared_weights=True,
         )
-        
+
         if isinstance(irreps_node_prev, str):
             self.irreps_node_prev = o3.Irreps(irreps_node_prev)
         else:
             self.irreps_node_prev = irreps_node_prev
-        
+
         self.linear_node_dst = Linear(
             irreps_in=irreps_node_fea,
             irreps_out=self.irreps_node_prev,
@@ -389,27 +379,27 @@ class Edge_builder_tp(GraphModuleMixin, torch.nn.Module):
         )
 
     def forward(self, data: AtomicDataDict.Type) -> AtomicDataDict.Type:
-        
+
         weight = self.fc(data[AtomicDataDict.EDGE_EMBEDDING_KEY])
 
         x = data[AtomicDataDict.NODE_FEATURES_KEY]
         edge_src = data[AtomicDataDict.EDGE_INDEX_KEY][1] # i
         edge_dst = data[AtomicDataDict.EDGE_INDEX_KEY][0] # j
 
-        x_i = self.linear_node_src(x[edge_src]) 
+        x_i = self.linear_node_src(x[edge_src])
         x_j = self.linear_node_dst(x[edge_dst])
-        
+
         edge_features = self.tp(
             x_i, x_j, weight
         )
 
         edge_features = self.linear_edge(edge_features)
-          
+
         data[AtomicDataDict.EDGE_FEATURES_KEY] = data[AtomicDataDict.EDGE_FEATURES_KEY] + edge_features
         return data
 
 class Triplet_builder(GraphModuleMixin, torch.nn.Module):
-    
+
     def __init__(
         self,
         irreps_in,
@@ -439,11 +429,11 @@ class Triplet_builder(GraphModuleMixin, torch.nn.Module):
             },
             irreps_out={AtomicDataDict.TRIPLET_FEATURES_KEY: irreps_out},
         )
-        
+
         self.ang_emb = sph_harm_layer(self.irreps_in[AtomicDataDict.ANGLE_EMBEDDING_KEY].num_irreps)
-        
-        irreps_edge_fea = self.irreps_in[AtomicDataDict.EDGE_FEATURES_KEY]   
-        feature_irreps_out = self.irreps_out[AtomicDataDict.TRIPLET_FEATURES_KEY]  
+
+        irreps_edge_fea = self.irreps_in[AtomicDataDict.EDGE_FEATURES_KEY]
+        feature_irreps_out = self.irreps_out[AtomicDataDict.TRIPLET_FEATURES_KEY]
 
         # - Build modules -
         self.linear_edge_kj = Linear(
@@ -452,14 +442,14 @@ class Triplet_builder(GraphModuleMixin, torch.nn.Module):
             internal_weights=True,
             shared_weights=True,
         )
-        
+
         self.linear_edge_ji = Linear(
             irreps_in=irreps_edge_fea,
             irreps_out=irreps_edge_fea,
             internal_weights=True,
             shared_weights=True,
-        )   
-        
+        )
+
         irreps_mid = []
         instructions = []
         for i, (mul, ir_in1) in enumerate(irreps_edge_fea):
@@ -507,7 +497,7 @@ class Triplet_builder(GraphModuleMixin, torch.nn.Module):
             internal_weights=True,
             shared_weights=True,
         )
-        
+
     def triplets(self, edge_index, num_nodes, cell_shift):
         row, col = edge_index  # j->i
 
@@ -526,7 +516,7 @@ class Triplet_builder(GraphModuleMixin, torch.nn.Module):
         # Edge indices (k-j, j->i) for triplets.
         idx_kj = adj_t_row.storage.value()
         idx_ji = adj_t_row.storage.row()
- 
+
         """
         idx_i -> pos[idx_i]
         idx_j -> pos[idx_j] - nbr_shift[idx_ji]
@@ -547,11 +537,11 @@ class Triplet_builder(GraphModuleMixin, torch.nn.Module):
         cell_shift = data.cell_shift # shape(Nedges, 3)
 
         i, j, idx_i, idx_j, idx_k, idx_kj, idx_ji = self.triplets(edge_index, z.size(0), cell_shift)
-        
+
         # Calculate angles -- revised version
         pos_i = pos[idx_i]
         pos_j = pos[idx_j] - nbr_shift[idx_ji]
-        pos_k = pos[idx_k] - nbr_shift[idx_ji] - nbr_shift[idx_kj] 
+        pos_k = pos[idx_k] - nbr_shift[idx_ji] - nbr_shift[idx_kj]
 
         pos_ji = pos_j - pos_i
         pos_kj = pos_k - pos_j
@@ -559,20 +549,20 @@ class Triplet_builder(GraphModuleMixin, torch.nn.Module):
         a = (pos_ji * pos_kj).sum(dim=-1)
         b = torch.cross(pos_ji, pos_kj).norm(dim=-1)
         angle = torch.atan2(b, a)
-        
+
         ang_emb = self.ang_emb(angle)
-        
+
         edge_kj = self.linear_edge_kj(data[AtomicDataDict.EDGE_FEATURES_KEY])[idx_kj]
         edge_ji = self.linear_edge_ji(data[AtomicDataDict.EDGE_FEATURES_KEY])[idx_ji]
-        
+
         weight = self.fc(ang_emb)
-        
+
         triplet_fea = self.tp(
             edge_kj, edge_ji, weight
         )
 
         triplet_fea = self.linear_triplet(triplet_fea)
-        
+
         data[AtomicDataDict.TRIPLET_FEATURES_KEY] = triplet_fea
         data[AtomicDataDict.TRIPLET_INDEX_KEY] = (idx_i, idx_j, idx_k, idx_kj, idx_ji)
         return data
@@ -580,10 +570,10 @@ class Triplet_builder(GraphModuleMixin, torch.nn.Module):
 class Ham_layer(nn.Module):
     def __init__(self, irreps_in, feature_irreps_hidden, irreps_out, nonlinearity_type: str = "gate", resnet: bool = True):
         super().__init__()
-        self.residual = residual_block(irreps_in=irreps_in, feature_irreps_hidden=feature_irreps_hidden, 
-                                                 nonlinearity_type = nonlinearity_type, resnet=resnet) 
-        self.linear = Linear(irreps_in=irreps_in, irreps_out=irreps_out) 
-        
+        self.residual = residual_block(irreps_in=irreps_in, feature_irreps_hidden=feature_irreps_hidden,
+                                                 nonlinearity_type = nonlinearity_type, resnet=resnet)
+        self.linear = Linear(irreps_in=irreps_in, irreps_out=irreps_out)
+
     def forward(self, x):
         x = self.residual(x)
         x = self.linear(x)
@@ -592,10 +582,10 @@ class Ham_layer(nn.Module):
 class HamGNN_pre(nn.Module):
     def __init__(self, config):
         super(HamGNN_pre, self).__init__()
-        
+
         self.num_types = config.HamGNN_pre.num_types # number of atomic species in the dataset
         self.set_features = config.HamGNN_pre.set_features # Whether to set one_hot encoding as node_features in data
-        
+
         self.export_triplet = config.HamGNN_pre.export_triplet # Whether to export the features of the triplet
         #
         self.irreps_edge_sh = config.HamGNN_pre.irreps_edge_sh
@@ -604,7 +594,7 @@ class HamGNN_pre(nn.Module):
         #
         self.irreps_node_output = config.HamGNN_pre.irreps_node_output
         self.irreps_edge_output = config.HamGNN_pre.irreps_edge_output
-        
+
         # Cosine basis function expansion layer
         self.cutoff = config.HamGNN_pre.cutoff
         self.cutoff_func = config.HamGNN_pre.cutoff_func
@@ -615,59 +605,59 @@ class HamGNN_pre(nn.Module):
         else:
             print(f'There is no {self.cutoff_func} cutoff function!')
             quit()
-            
+
         self.rbf_func = config.HamGNN_pre.rbf_func
         self.num_radial = config.HamGNN_pre.num_radial
-        if self.rbf_func.lower() == 'gaussian': 
+        if self.rbf_func.lower() == 'gaussian':
             self.rbf_func = GaussianSmearing(start=0.0, stop=self.cutoff, num_gaussians=self.num_radial, cutoff_func=self.cutoff_func)
         elif self.rbf_func.lower() == 'bessel':
             self.rbf_func = BesselBasis(cutoff=self.cutoff, n_rbf=self.num_radial, cutoff_func=self.cutoff_func)
         else:
             print(f'There is no {self.rbf_func} rbf function!')
             quit()
-        # 
+        #
         self.num_interaction_layers = config.HamGNN_pre.num_interaction_layers # number of interaction layers
-        self.resnet = config.HamGNN_pre.resnet # Whether to add residual layer       
+        self.resnet = config.HamGNN_pre.resnet # Whether to add residual layer
         #
         self.irreps_node_features = config.HamGNN_pre.irreps_node_features # irreducible representations of the node
         #
         self.feature_irreps_hidden = config.HamGNN_pre.feature_irreps_hidden # Hidden irreducible representation of nodes in convolutional layers
-        self.invariant_layers = config.HamGNN_pre.invariant_layers 
+        self.invariant_layers = config.HamGNN_pre.invariant_layers
         self.invariant_neurons = config.HamGNN_pre.invariant_neurons
         convolution_kwargs : dict = {'invariant_layers':self.invariant_layers, 'invariant_neurons': self.invariant_neurons} # Additional initialization parameters for the conv layer
-        
+
         self.one_hot = OneHotAtomEncoding(num_types=self.num_types, set_features=self.set_features) # The atomic number of the node is mapped to the one_hot encoding of "num_types*0e"
-        
+
         # Embed the direction of the edge as a spherical harmonic feature, irreps_edge_sh is the irreducible representations of the direction of the edge
         self.spharm_edges = SphericalHarmonicEdgeAttrs(irreps_edge_sh=self.irreps_edge_sh, edge_sh_normalization=self.edge_sh_normalization,
-                                                       edge_sh_normalize = self.edge_sh_normalize) 
-        
+                                                       edge_sh_normalize = self.edge_sh_normalize)
+
         # Embed edge distances as features of 'num_basis*0e'
         self.radial_basis = RadialBasisEdgeEncoding(basis=self.rbf_func, cutoff=self.cutoff_func)
-        
-        self.chemical_embedding = AtomwiseLinear(irreps_in={AtomicDataDict.NODE_FEATURES_KEY: self.one_hot.irreps_out['node_attrs']}, 
+
+        self.chemical_embedding = AtomwiseLinear(irreps_in={AtomicDataDict.NODE_FEATURES_KEY: self.one_hot.irreps_out['node_attrs']},
                                                  irreps_out=self.irreps_node_features)
-        
-        self.convnet = nn.ModuleList([ConvNetLayer(irreps_in={AtomicDataDict.EDGE_ATTRS_KEY: self.irreps_edge_sh, AtomicDataDict.EDGE_EMBEDDING_KEY:self.radial_basis.irreps_out[AtomicDataDict.EDGE_EMBEDDING_KEY], 
-                                                              AtomicDataDict.NODE_FEATURES_KEY: self.irreps_node_features, AtomicDataDict.NODE_ATTRS_KEY:self.one_hot.irreps_out[AtomicDataDict.NODE_ATTRS_KEY]}, 
-                                                   feature_irreps_hidden=self.feature_irreps_hidden, 
+
+        self.convnet = nn.ModuleList([ConvNetLayer(irreps_in={AtomicDataDict.EDGE_ATTRS_KEY: self.irreps_edge_sh, AtomicDataDict.EDGE_EMBEDDING_KEY:self.radial_basis.irreps_out[AtomicDataDict.EDGE_EMBEDDING_KEY],
+                                                              AtomicDataDict.NODE_FEATURES_KEY: self.irreps_node_features, AtomicDataDict.NODE_ATTRS_KEY:self.one_hot.irreps_out[AtomicDataDict.NODE_ATTRS_KEY]},
+                                                   feature_irreps_hidden=self.feature_irreps_hidden,
                                                    convolution_kwargs = convolution_kwargs, resnet=self.resnet) for _ in range(self.num_interaction_layers)])
-        
+
         self.conv_to_output_node = AtomwiseLinear(irreps_in={AtomicDataDict.NODE_FEATURES_KEY: self.irreps_node_features}, irreps_out=self.irreps_node_output)
-        
+
         #"""
-        self.conv_to_output_edge = Edge_builder(irreps_in={AtomicDataDict.NODE_FEATURES_KEY: self.irreps_node_output, 
+        self.conv_to_output_edge = Edge_builder(irreps_in={AtomicDataDict.NODE_FEATURES_KEY: self.irreps_node_output,
                                                            AtomicDataDict.EDGE_ATTRS_KEY: self.irreps_edge_sh,
-                                                           AtomicDataDict.EDGE_EMBEDDING_KEY:self.radial_basis.irreps_out[AtomicDataDict.EDGE_EMBEDDING_KEY]}, 
+                                                           AtomicDataDict.EDGE_EMBEDDING_KEY:self.radial_basis.irreps_out[AtomicDataDict.EDGE_EMBEDDING_KEY]},
                                                 irreps_out= self.irreps_edge_output, **convolution_kwargs)
-        
+
         if self.export_triplet:
             self.num_spherical = config.HamGNN_pre.num_spherical
             self.irreps_triplet_output = config.HamGNN_pre.irreps_triplet_output
-            self.conv_to_output_triplet = Triplet_builder(irreps_in={AtomicDataDict.EDGE_FEATURES_KEY: self.irreps_edge_output, 
-                                                           AtomicDataDict.ANGLE_EMBEDDING_KEY: o3.Irreps([(self.num_spherical, (0, 1))])}, 
+            self.conv_to_output_triplet = Triplet_builder(irreps_in={AtomicDataDict.EDGE_FEATURES_KEY: self.irreps_edge_output,
+                                                           AtomicDataDict.ANGLE_EMBEDDING_KEY: o3.Irreps([(self.num_spherical, (0, 1))])},
                                                           irreps_out= self.irreps_triplet_output, **convolution_kwargs)
-    
+
     def forward(self, data, batch=None):
         self.one_hot(data)
         self.spharm_edges(data)
@@ -676,24 +666,24 @@ class HamGNN_pre(nn.Module):
         # orbital convolution
         for i in range(self.num_interaction_layers):
             self.convnet[i](data)
-        self.conv_to_output_node(data)    
-        self.conv_to_output_edge(data)    
+        self.conv_to_output_node(data)
+        self.conv_to_output_edge(data)
         graph_representation = EasyDict()
         graph_representation['node_attr'] = data[AtomicDataDict.NODE_FEATURES_KEY]
         graph_representation['edge_attr'] = data[AtomicDataDict.EDGE_FEATURES_KEY]
         if self.export_triplet:
             self.conv_to_output_triplet(data)
-            graph_representation['triplet_attr'] = data[AtomicDataDict.TRIPLET_FEATURES_KEY] 
-            graph_representation['triplet_index'] = data[AtomicDataDict.TRIPLET_INDEX_KEY]    
+            graph_representation['triplet_attr'] = data[AtomicDataDict.TRIPLET_FEATURES_KEY]
+            graph_representation['triplet_index'] = data[AtomicDataDict.TRIPLET_INDEX_KEY]
         return graph_representation
 
 class HamGNN_pre2(nn.Module):
     def __init__(self, config):
         super(HamGNN_pre2, self).__init__()
-        
+
         #self.num_types = config.HamGNN_pre.num_types # number of atomic species in the dataset
         self.set_features = config.HamGNN_pre.set_features # Whether to set one_hot encoding as node_features in data
-        
+
         self.export_triplet = config.HamGNN_pre.export_triplet # Whether to export the features of the triplet
         #
         self.irreps_edge_sh = config.HamGNN_pre.irreps_edge_sh
@@ -702,7 +692,7 @@ class HamGNN_pre2(nn.Module):
         #
         self.irreps_node_output = config.HamGNN_pre.irreps_node_output
         self.irreps_edge_output = config.HamGNN_pre.irreps_edge_output
-        
+
         # Cosine basis function expansion layer
         self.cutoff = config.HamGNN_pre.cutoff
         self.cutoff_func = config.HamGNN_pre.cutoff_func
@@ -713,75 +703,75 @@ class HamGNN_pre2(nn.Module):
         else:
             print(f'There is no {self.cutoff_func} cutoff function!')
             quit()
-            
+
         self.rbf_func = config.HamGNN_pre.rbf_func
         self.num_radial = config.HamGNN_pre.num_radial
-        if self.rbf_func.lower() == 'gaussian': 
+        if self.rbf_func.lower() == 'gaussian':
             self.rbf_func = GaussianSmearing(start=0.0, stop=self.cutoff, num_gaussians=self.num_radial, cutoff_func=self.cutoff_func)
         elif self.rbf_func.lower() == 'bessel':
             self.rbf_func = BesselBasis(cutoff=self.cutoff, n_rbf=self.num_radial, cutoff_func=self.cutoff_func)
         else:
             print(f'There is no {self.rbf_func} rbf function!')
             quit()
-        # 
+        #
         self.num_interaction_layers = config.HamGNN_pre.num_interaction_layers # number of interaction layers
-        self.resnet = config.HamGNN_pre.resnet # Whether to add residual layer       
+        self.resnet = config.HamGNN_pre.resnet # Whether to add residual layer
         #
         self.irreps_node_features = config.HamGNN_pre.irreps_node_features # irreducible representations of the node
         #
         self.feature_irreps_hidden = config.HamGNN_pre.feature_irreps_hidden # Hidden irreducible representation of nodes in convolutional layers
-        self.invariant_layers = config.HamGNN_pre.invariant_layers 
+        self.invariant_layers = config.HamGNN_pre.invariant_layers
         self.invariant_neurons = config.HamGNN_pre.invariant_neurons
         convolution_kwargs : dict = {'invariant_layers':self.invariant_layers, 'invariant_neurons': self.invariant_neurons} # Additional initialization parameters for the conv layer
-        
+
         #self.one_hot = OneHotAtomEncoding(num_types=self.num_types, set_features=self.set_features) # The atomic number of the node is mapped to the one_hot encoding of "num_types*0e"
-        
+
         self.num_node_attr_feas = config.HamGNN_pre.num_node_attr_feas
         self.emb = Embedding_block(num_node_attr_feas = self.num_node_attr_feas, set_features=self.set_features)
-        
+
         # Embed the direction of the edge as a spherical harmonic feature, irreps_edge_sh is the irreducible representations of the direction of the edge
         self.spharm_edges = SphericalHarmonicEdgeAttrs(irreps_edge_sh=self.irreps_edge_sh, edge_sh_normalization=self.edge_sh_normalization,
-                                                       edge_sh_normalize = self.edge_sh_normalize) 
-        
+                                                       edge_sh_normalize = self.edge_sh_normalize)
+
         # Embed edge distances as features of 'num_basis*0e'
         self.radial_basis = RadialBasisEdgeEncoding(basis=self.rbf_func, cutoff=self.cutoff_func)
-        
-        self.chemical_embedding = AtomwiseLinear(irreps_in={AtomicDataDict.NODE_FEATURES_KEY: self.emb.irreps_out['node_attrs']}, 
+
+        self.chemical_embedding = AtomwiseLinear(irreps_in={AtomicDataDict.NODE_FEATURES_KEY: self.emb.irreps_out['node_attrs']},
                                                  irreps_out=self.irreps_node_features)
-        
-        self.convnet = nn.ModuleList([ConvNetLayer(irreps_in={AtomicDataDict.EDGE_ATTRS_KEY: self.irreps_edge_sh, AtomicDataDict.EDGE_EMBEDDING_KEY:self.radial_basis.irreps_out[AtomicDataDict.EDGE_EMBEDDING_KEY], 
-                                                              AtomicDataDict.NODE_FEATURES_KEY: self.irreps_node_features, AtomicDataDict.NODE_ATTRS_KEY:self.emb.irreps_out[AtomicDataDict.NODE_ATTRS_KEY]}, 
-                                                   feature_irreps_hidden=self.feature_irreps_hidden, 
+
+        self.convnet = nn.ModuleList([ConvNetLayer(irreps_in={AtomicDataDict.EDGE_ATTRS_KEY: self.irreps_edge_sh, AtomicDataDict.EDGE_EMBEDDING_KEY:self.radial_basis.irreps_out[AtomicDataDict.EDGE_EMBEDDING_KEY],
+                                                              AtomicDataDict.NODE_FEATURES_KEY: self.irreps_node_features, AtomicDataDict.NODE_ATTRS_KEY:self.emb.irreps_out[AtomicDataDict.NODE_ATTRS_KEY]},
+                                                   feature_irreps_hidden=self.feature_irreps_hidden,
                                                    convolution_kwargs = convolution_kwargs, resnet=self.resnet) for _ in range(self.num_interaction_layers)])
-        
+
         self.conv_to_output_node = AtomwiseLinear(irreps_in={AtomicDataDict.NODE_FEATURES_KEY: self.irreps_node_features}, irreps_out=self.irreps_node_output)
-        
+
         #"""
-        self.conv_to_output_edge = Edge_builder(irreps_in={AtomicDataDict.NODE_FEATURES_KEY: self.irreps_node_output, 
+        self.conv_to_output_edge = Edge_builder(irreps_in={AtomicDataDict.NODE_FEATURES_KEY: self.irreps_node_output,
                                                            AtomicDataDict.EDGE_ATTRS_KEY: self.irreps_edge_sh,
-                                                           AtomicDataDict.EDGE_EMBEDDING_KEY:self.radial_basis.irreps_out[AtomicDataDict.EDGE_EMBEDDING_KEY]}, 
+                                                           AtomicDataDict.EDGE_EMBEDDING_KEY:self.radial_basis.irreps_out[AtomicDataDict.EDGE_EMBEDDING_KEY]},
                                                 irreps_out= self.irreps_edge_output, **convolution_kwargs)
-        
+
         self.add_edge_tp = config.HamGNN_pre.add_edge_tp
         if self.add_edge_tp:
             self.irreps_node_prev = config.HamGNN_pre.irreps_node_prev
-            self.conv_to_output_edge_tp = Edge_builder_tp(irreps_in={AtomicDataDict.NODE_FEATURES_KEY: self.irreps_node_output, 
+            self.conv_to_output_edge_tp = Edge_builder_tp(irreps_in={AtomicDataDict.NODE_FEATURES_KEY: self.irreps_node_output,
                                                            AtomicDataDict.EDGE_ATTRS_KEY: self.irreps_edge_sh,
-                                                           AtomicDataDict.EDGE_EMBEDDING_KEY:self.radial_basis.irreps_out[AtomicDataDict.EDGE_EMBEDDING_KEY]}, 
+                                                           AtomicDataDict.EDGE_EMBEDDING_KEY:self.radial_basis.irreps_out[AtomicDataDict.EDGE_EMBEDDING_KEY]},
                                                             irreps_node_prev=self.irreps_node_prev,
                                                             irreps_out= self.irreps_edge_output, **convolution_kwargs)
-        
+
         if self.export_triplet:
             self.num_spherical = config.HamGNN_pre.num_spherical
             self.irreps_triplet_output = config.HamGNN_pre.irreps_triplet_output
-            self.conv_to_output_triplet = Triplet_builder(irreps_in={AtomicDataDict.EDGE_FEATURES_KEY: self.irreps_edge_output, 
-                                                           AtomicDataDict.ANGLE_EMBEDDING_KEY: o3.Irreps([(self.num_spherical, (0, 1))])}, 
+            self.conv_to_output_triplet = Triplet_builder(irreps_in={AtomicDataDict.EDGE_FEATURES_KEY: self.irreps_edge_output,
+                                                           AtomicDataDict.ANGLE_EMBEDDING_KEY: o3.Irreps([(self.num_spherical, (0, 1))])},
                                                           irreps_out= self.irreps_triplet_output, **convolution_kwargs)
         #"""
-        
-        #self.conv_to_output_edge = AtomwiseLinear(field=AtomicDataDict.EDGE_FEATURES_KEY, out_field=AtomicDataDict.EDGE_FEATURES_KEY, 
+
+        #self.conv_to_output_edge = AtomwiseLinear(field=AtomicDataDict.EDGE_FEATURES_KEY, out_field=AtomicDataDict.EDGE_FEATURES_KEY,
                                                   #irreps_in={AtomicDataDict.EDGE_FEATURES_KEY: self.convnet[-1].conv.linear_2.irreps_in}, irreps_out= self.irreps_edge_output)
-    
+
     def forward(self, data, batch=None):
         #self.one_hot(data)
         self.emb(data)
@@ -791,26 +781,26 @@ class HamGNN_pre2(nn.Module):
         # orbital convolution
         for i in range(self.num_interaction_layers):
             self.convnet[i](data)
-        self.conv_to_output_node(data)    
-        self.conv_to_output_edge(data)  
+        self.conv_to_output_node(data)
+        self.conv_to_output_edge(data)
         if self.add_edge_tp:
-            self.conv_to_output_edge_tp(data)  
+            self.conv_to_output_edge_tp(data)
         graph_representation = EasyDict()
         graph_representation['node_attr'] = data[AtomicDataDict.NODE_FEATURES_KEY]
         graph_representation['edge_attr'] = data[AtomicDataDict.EDGE_FEATURES_KEY]
         if self.export_triplet:
             self.conv_to_output_triplet(data)
-            graph_representation['triplet_attr'] = data[AtomicDataDict.TRIPLET_FEATURES_KEY] 
-            graph_representation['triplet_index'] = data[AtomicDataDict.TRIPLET_INDEX_KEY]    
+            graph_representation['triplet_attr'] = data[AtomicDataDict.TRIPLET_FEATURES_KEY]
+            graph_representation['triplet_index'] = data[AtomicDataDict.TRIPLET_INDEX_KEY]
         return graph_representation
 
 class HamGNN_out(nn.Module):
-    
-    def __init__(self, irreps_in_node: Union[int, str, o3.Irreps]=None, irreps_in_edge: Union[int, str, o3.Irreps]=None, irreps_in_triplet: Union[int, str, o3.Irreps]=None, nao_max: int = 14, return_forces=False, create_graph=False, 
-                 ham_type: str='openmx', ham_only: bool = False, symmetrize: bool=True, include_triplet: bool = False, calculate_band_energy: bool = False, num_k: int = 8, 
+
+    def __init__(self, irreps_in_node: Union[int, str, o3.Irreps]=None, irreps_in_edge: Union[int, str, o3.Irreps]=None, irreps_in_triplet: Union[int, str, o3.Irreps]=None, nao_max: int = 14, return_forces=False, create_graph=False,
+                 ham_type: str='openmx', ham_only: bool = False, symmetrize: bool=True, include_triplet: bool = False, calculate_band_energy: bool = False, num_k: int = 8,
                  k_path:Union[list, np.array, tuple]=None, band_num_control:dict=None, soc_switch:bool=True, nonlinearity_type:str='norm', export_reciprocal_values: bool = False, add_H0:bool= False):
 
-        
+
         """
         nao_max (int): Maximum total number of atomic orbits
         """
@@ -835,15 +825,15 @@ class HamGNN_out(nn.Module):
         self.calculate_band_energy = calculate_band_energy
         self.num_k = num_k
         self.k_path = k_path
-        
-        # band_num_control      
-        if (band_num_control is not None) and (not self.export_reciprocal_values) and (isinstance(band_num_control, dict)):      
+
+        # band_num_control
+        if (band_num_control is not None) and (not self.export_reciprocal_values) and (isinstance(band_num_control, dict)):
             self.band_num_control = {Element[k].Z: band_num_control[k] for k in band_num_control.keys()}
         elif isinstance(band_num_control, int):
             self.band_num_control = band_num_control
         else:
             self.band_num_control = None
-        
+
         # openmx
         if self.ham_type == 'openmx':
             self.num_valence = {Element['H'].Z: 1, Element['He'].Z: 2, Element['Li'].Z: 3, Element['Be'].Z: 2, Element['B'].Z: 3,
@@ -863,9 +853,9 @@ class HamGNN_out(nn.Module):
                                 Element['Ir'].Z: 15, Element['Pt'].Z: 16, Element['Au'].Z: 17, Element['Hg'].Z: 18, Element['Tl'].Z: 19,
                                 Element['Pb'].Z: 14, Element['Bi'].Z: 15
                             }
-            
+
             if self.nao_max == 14:
-                self.index_change = torch.LongTensor([0,1,2,5,3,4,8,6,7,11,13,9,12,10])       
+                self.index_change = torch.LongTensor([0,1,2,5,3,4,8,6,7,11,13,9,12,10])
                 self.row = self.col = o3.Irreps("1x0e+1x0e+1x0e+1x1o+1x1o+1x2e")
                 self.basis_def = {  1:[0,1,3,4,5], # H
                                     2:[0,1,3,4,5], # He
@@ -887,10 +877,10 @@ class HamGNN_out(nn.Module):
                                     18:[0,1,3,4,5,6,7,8,9,10,11,12,13], # Ar
                                     19:[0,1,2,3,4,5,6,7,8,9,10,11,12,13], # K
                                     20:[0,1,2,3,4,5,6,7,8,9,10,11,12,13], # Ca
-                                    35:[0,1,2,3,4,5,6,7,8,9,10,11,12,13], # Br  
+                                    35:[0,1,2,3,4,5,6,7,8,9,10,11,12,13], # Br
                                     Element['V'].Z: [0,1,2,3,4,5,6,7,8,9,10,11,12,13], # V
                                 }
-            
+
             elif self.nao_max == 13:
                 self.basis_def = {  1:[0,1,2,3,4], # H
                                     5:[0,1,2,3,4,5,6,7,8,9,10,11,12], # B
@@ -898,11 +888,11 @@ class HamGNN_out(nn.Module):
                                     7:[0,1,2,3,4,5,6,7,8,9,10,11,12], # N
                                     8:[0,1,2,3,4,5,6,7,8,9,10,11,12] # O
                                 }
-                self.index_change = torch.LongTensor([0,1,4,2,3,7,5,6,10,12,8,11,9])       
+                self.index_change = torch.LongTensor([0,1,4,2,3,7,5,6,10,12,8,11,9])
                 self.row = self.col = o3.Irreps("1x0e+1x0e+1x1o+1x1o+1x2e")
-            
+
             elif self.nao_max == 19:
-                self.index_change = torch.LongTensor([0,1,2,5,3,4,8,6,7,11,13,9,12,10,16,18,14,17,15])       
+                self.index_change = torch.LongTensor([0,1,2,5,3,4,8,6,7,11,13,9,12,10,16,18,14,17,15])
                 self.row = self.col = o3.Irreps("1x0e+1x0e+1x0e+1x1o+1x1o+1x2e+1x2e")
                 self.basis_def = {  1:[0,1,3,4,5], # H
                                     2:[0,1,3,4,5], # He
@@ -924,22 +914,22 @@ class HamGNN_out(nn.Module):
                                     18:[0,1,3,4,5,6,7,8,9,10,11,12,13], # Ar
                                     19:[0,1,2,3,4,5,6,7,8,9,10,11,12,13], # K
                                     20:[0,1,2,3,4,5,6,7,8,9,10,11,12,13], # Ca
-                                    42:[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18], # Mo   
-                                    83:[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18], # Bi  
+                                    42:[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18], # Mo
+                                    83:[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18], # Bi
                                     34:[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18], # Se
-                                    24:[0,1,2,3,4,5,6,7,8,9,10,11,12,13], # Cr 
-                                    53:[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18], # I  
+                                    24:[0,1,2,3,4,5,6,7,8,9,10,11,12,13], # Cr
+                                    53:[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18], # I
                                     82:[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18], # pb
                                     55:[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18], # Cs
                                     33:[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18], # As
-                                    31:[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18], # Ga  
+                                    31:[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18], # Ga
                                     32:[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18], # Ge
                                     Element['V'].Z: [0,1,2,3,4,5,6,7,8,9,10,11,12,13], # V
                                     Element['Sb'].Z: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18], # Sb
                                 }
-            
+
             elif self.nao_max == 26:
-                self.index_change = torch.LongTensor([0,1,2,5,3,4,8,6,7,11,13,9,12,10,16,18,14,17,15,22,23,21,24,20,25,19])       
+                self.index_change = torch.LongTensor([0,1,2,5,3,4,8,6,7,11,13,9,12,10,16,18,14,17,15,22,23,21,24,20,25,19])
                 self.row = self.col = o3.Irreps("1x0e+1x0e+1x0e+1x1o+1x1o+1x2e+1x2e+1x3o")
                 self.basis_def = (lambda s1=[0],s2=[1],s3=[2],p1=[3,4,5],p2=[6,7,8],d1=[9,10,11,12,13],d2=[14,15,16,17,18],f1=[19,20,21,22,23,24,25]: {
                     Element['H'].Z : s1+s2+p1,  # H6.0-s2p1
@@ -1018,11 +1008,11 @@ class HamGNN_out(nn.Module):
                     Element['Hg'].Z: s1+s2+s3+p1+p2+d1+d2+f1,  # Hg8.0-s3p2d2f1
                     Element['Tl'].Z: s1+s2+s3+p1+p2+d1+d2+f1,  # Tl8.0-s3p2d2f1
                     Element['Pb'].Z: s1+s2+s3+p1+p2+d1+d2+f1,  # Pb8.0-s3p2d2f1
-                    Element['Bi'].Z: s1+s2+s3+p1+p2+d1+d2+f1,  # Bi8.0-s3p2d2f1 
+                    Element['Bi'].Z: s1+s2+s3+p1+p2+d1+d2+f1,  # Bi8.0-s3p2d2f1
                 })()
             else:
                 raise NotImplementedError
-        
+
         elif self.ham_type == 'siesta':
             self.num_valence = {
                 1:1,2:2,
@@ -1031,7 +1021,7 @@ class HamGNN_out(nn.Module):
                 19:1,20:2,22:12
             }
             if self.nao_max == 13:
-                self.index_change = None       
+                self.index_change = None
                 self.row = self.col = o3.Irreps("1x0e+1x0e+1x1o+1x1o+1x2e")
                 self.minus_index = torch.LongTensor([2,4,5,7,9,11]) # this list should follow the order in siesta. See spher_harm.f
                 self.basis_def = (lambda s1=[0],s2=[1],p1=[2,3,4],p2=[5,6,7],d1=[8,9,10,11,12]: {
@@ -1087,7 +1077,7 @@ class HamGNN_out(nn.Module):
                 raise NotImplementedError
         elif self.ham_type == 'abacus':
             if self.nao_max == 27:
-                self.index_change = torch.LongTensor([0,1,2,3,5,6,4,8,9,7,12,13,11,14,10,17,18,16,19,15,23,24,22,25,21,26,20])       
+                self.index_change = torch.LongTensor([0,1,2,3,5,6,4,8,9,7,12,13,11,14,10,17,18,16,19,15,23,24,22,25,21,26,20])
                 self.row = self.col = o3.Irreps("1x0e+1x0e+1x0e+1x0e+1x1o+1x1o+1x2e+1x2e+1x3o")
                 self.minus_index = torch.LongTensor([5,6,8,9,11,12,16,17,21,22,25,26]) # this list should follow the order in abacus.
                 self.basis_def = (lambda s1=[0],s2=[1],s3=[2],s4=[3],p1=[4,5,6],p2=[7,8,9],d1=[10,11,12,13,14],d2=[15,16,17,18,19],f1=[20,21,22,23,24,25,26]: {
@@ -1192,38 +1182,38 @@ class HamGNN_out(nn.Module):
                                 81: 13, 82: 14,
                                 83: 15}
         # pasp
-        elif self.ham_type == 'pasp':   
+        elif self.ham_type == 'pasp':
             self.row = self.col = o3.Irreps("1x1o")
         else:
             raise NotImplementedError
-        
+
         self._init_irreps()
         self.cg_cal = ClebschGordan()
 
-        # hamiltonian                        
-        self.onsitenet_residual = residual_block(irreps_in=irreps_in_node, feature_irreps_hidden=irreps_in_node, 
-                                                 nonlinearity_type = self.nonlinearity_type, resnet=True) 
+        # hamiltonian
+        self.onsitenet_residual = residual_block(irreps_in=irreps_in_node, feature_irreps_hidden=irreps_in_node,
+                                                 nonlinearity_type = self.nonlinearity_type, resnet=True)
         self.onsitenet_linear = Linear(irreps_in=irreps_in_node, irreps_out=self.ham_irreps)
-           
-        self.offsitenet_residual = residual_block(irreps_in=irreps_in_edge, feature_irreps_hidden=irreps_in_edge, 
-                                                 nonlinearity_type = self.nonlinearity_type, resnet=True)  
+
+        self.offsitenet_residual = residual_block(irreps_in=irreps_in_edge, feature_irreps_hidden=irreps_in_edge,
+                                                 nonlinearity_type = self.nonlinearity_type, resnet=True)
         self.offsitenet_linear = Linear(irreps_in=irreps_in_edge, irreps_out=self.ham_irreps)
-        
+
         if soc_switch:
-            self.onsitenet_residual_ksi = residual_block(irreps_in=irreps_in_node, feature_irreps_hidden=irreps_in_node, 
-                                                 nonlinearity_type = self.nonlinearity_type, resnet=True) 
+            self.onsitenet_residual_ksi = residual_block(irreps_in=irreps_in_node, feature_irreps_hidden=irreps_in_node,
+                                                 nonlinearity_type = self.nonlinearity_type, resnet=True)
             self.ksi_on_scalar = Linear(irreps_in=irreps_in_node, irreps_out=(self.nao_max**2*o3.Irreps("0e")).simplify())
-            
-            self.offsitenet_residual_ksi = residual_block(irreps_in=irreps_in_edge, feature_irreps_hidden=irreps_in_edge, 
+
+            self.offsitenet_residual_ksi = residual_block(irreps_in=irreps_in_edge, feature_irreps_hidden=irreps_in_edge,
                                                  nonlinearity_type = self.nonlinearity_type, resnet=True)
             self.ksi_off_scalar = Linear(irreps_in=irreps_in_edge, irreps_out=(self.nao_max**2*o3.Irreps("0e")).simplify())
-        
-        if not self.ham_only:            
-            self.onsitenet_s = Ham_layer(irreps_in=irreps_in_node, feature_irreps_hidden=irreps_in_node,irreps_out=self.ham_irreps, 
+
+        if not self.ham_only:
+            self.onsitenet_s = Ham_layer(irreps_in=irreps_in_node, feature_irreps_hidden=irreps_in_node,irreps_out=self.ham_irreps,
                                                  nonlinearity_type = self.nonlinearity_type, resnet=True)
-            self.offsitenet_s = Ham_layer(irreps_in=irreps_in_edge, feature_irreps_hidden=irreps_in_edge, irreps_out=self.ham_irreps, 
+            self.offsitenet_s = Ham_layer(irreps_in=irreps_in_edge, feature_irreps_hidden=irreps_in_edge, irreps_out=self.ham_irreps,
                                                  nonlinearity_type = self.nonlinearity_type, resnet=True)
-                 
+
     def _init_irreps(self):
         """
         Initialize the irreducible representation of the Hamiltonian
@@ -1234,18 +1224,18 @@ class HamGNN_out(nn.Module):
         for _, li in self.row:
             for _, lj in self.col:
                 for L in range(abs(li.l-lj.l), li.l+lj.l+1):
-                    self.ham_irreps += o3.Irrep(L, (-1)**(li.l+lj.l)) 
+                    self.ham_irreps += o3.Irrep(L, (-1)**(li.l+lj.l))
 
         for irs in self.ham_irreps:
             self.ham_irreps_dim.append(irs.dim)
         self.ham_irreps_dim = torch.LongTensor(self.ham_irreps_dim)
 
-    def matrix_merge(self, sph_split):   
+    def matrix_merge(self, sph_split):
         """
         Incorporate irreducible representations into matrix blocks
         """
         block = torch.zeros(sph_split[0].shape[0], self.nao_max, self.nao_max).type_as(sph_split[0])
-        
+
         idx = 0 #index for accessing the correct irreps
         start_i = 0
         for _, li in self.row:
@@ -1254,7 +1244,7 @@ class HamGNN_out(nn.Module):
             for _, lj in self.col:
                 n_j = 2*lj.l+1
                 for L in range(abs(li.l-lj.l), li.l+lj.l+1):
-                    #compute inverse spherical tensor product             
+                    #compute inverse spherical tensor product
                     cg = math.sqrt(2*L+1)*self.cg_cal(li.l, lj.l, L).unsqueeze(0)
                     product = (cg*sph_split[idx].unsqueeze(-2).unsqueeze(-2)).sum(-1)
 
@@ -1265,27 +1255,27 @@ class HamGNN_out(nn.Module):
                     idx += 1
                 start_j += n_j
             start_i += n_i
-            
+
         return block.reshape(-1, self.nao_max*self.nao_max)
-    
+
     def change_index(self, hamiltonian):
         """
         Adjust the order of the output matrix elements to the atomic orbital order of openmx
         """
         if self.index_change is not None or hasattr(self, 'minus_index'):
-            hamiltonian = hamiltonian.reshape(-1, self.nao_max, self.nao_max)   
+            hamiltonian = hamiltonian.reshape(-1, self.nao_max, self.nao_max)
             if self.index_change is not None:
-                hamiltonian = hamiltonian[:, self.index_change[:,None], self.index_change[None,:]] 
+                hamiltonian = hamiltonian[:, self.index_change[:,None], self.index_change[None,:]]
             if hasattr(self, 'minus_index'):
                 hamiltonian[:,self.minus_index,:] = -hamiltonian[:,self.minus_index,:]
                 hamiltonian[:,:,self.minus_index] = -hamiltonian[:,:,self.minus_index]
-            hamiltonian = hamiltonian.reshape(-1, self.nao_max**2)                
+            hamiltonian = hamiltonian.reshape(-1, self.nao_max**2)
         return hamiltonian
-    
+
     def convert_to_mole_Ham(self, data, Hon, Hoff):
         # Get the number of nodes in each crystal
         max_atoms = torch.max(data.node_counts).item()
-                
+
         # parse the Atomic Orbital Basis Sets
         basis_definition = torch.zeros((99, self.nao_max)).type_as(data.z)
         basis_def_temp = copy.deepcopy(self.basis_def)
@@ -1293,11 +1283,11 @@ class HamGNN_out(nn.Module):
         for k in self.basis_def.keys():
             basis_def_temp[k] = [num-1 for num in self.basis_def[k]]
             basis_definition[k][basis_def_temp[k]] = 1
-            
-        orb_mask = basis_definition[data.z].view(-1, max_atoms*self.nao_max) # shape: [Nbatch, max_atoms*nao_max]  
+
+        orb_mask = basis_definition[data.z].view(-1, max_atoms*self.nao_max) # shape: [Nbatch, max_atoms*nao_max]
         orb_mask = orb_mask[:,:,None] * orb_mask[:,None,:]       # shape: [Nbatch, max_atoms*nao_max, max_atoms*nao_max]
         orb_mask = orb_mask.view(-1, max_atoms*self.nao_max) # shape: [Natoms*nao_max, max_atoms*nao_max]
-        
+
         atom_idx = torch.arange(data.z.shape[0]).type_as(data.z)
         H = torch.zeros([data.z.shape[0], max_atoms, self.nao_max**2]).type_as(Hon) # shape: [Natoms, max_atoms, nao_max**2]
         H[atom_idx, atom_idx%max_atoms] = Hon
@@ -1312,9 +1302,9 @@ class HamGNN_out(nn.Module):
         # mask padded orbitals
         H = torch.masked_select(H, orb_mask > 0)
         orbs = int(math.sqrt(H.shape[0] / (data.z.shape[0]/max_atoms)))
-        H = H.reshape(-1, orbs)              
+        H = H.reshape(-1, orbs)
         return H
-    
+
     def cat_onsite_and_offsite(self, data, Hon, Hoff):
         # Get the number of nodes in each crystal
         node_counts = data.node_counts
@@ -1330,8 +1320,8 @@ class HamGNN_out(nn.Module):
             H.append(Hon_split[i])
             H.append(Hoff_split[i])
         H = torch.cat(H, dim=0)
-        return H 
-    
+        return H
+
     def symmetrize_Hon(self, Hon, sign:str='+'):
         if self.symmetrize:
             Hon = Hon.reshape(-1, self.nao_max, self.nao_max)
@@ -1343,7 +1333,7 @@ class HamGNN_out(nn.Module):
             return Hon
         else:
             return Hon
-    
+
     def symmetrize_Hoff(self, Hoff, inv_edge_idx, sign:str='+'):
         if self.symmetrize:
             Hoff = Hoff.reshape(-1, self.nao_max, self.nao_max)
@@ -1355,7 +1345,7 @@ class HamGNN_out(nn.Module):
             return Hoff
         else:
             return Hoff
-    
+
     def cal_band_energy_debug(self, Hon, Hoff, Son, Soff, data, export_reciprocal_values:bool=False):
         """
         Currently this function can only be used to calculate the energy band of the openmx Hamiltonian.
@@ -1363,34 +1353,34 @@ class HamGNN_out(nn.Module):
         j, i = data.edge_index
         cell = data.cell # shape:(Nbatch, 3, 3)
         Nbatch = cell.shape[0]
-        
+
         # parse the Atomic Orbital Basis Sets
         basis_definition = torch.zeros((99, self.nao_max)).type_as(data.z)
         # key is the atomic number, value is the index of the occupied orbits.
         for k in self.basis_def.keys():
             basis_definition[k][self.basis_def[k]] = 1
-            
-        orb_mask = basis_definition[data.z] # shape: [Natoms, nao_max] 
+
+        orb_mask = basis_definition[data.z] # shape: [Natoms, nao_max]
         orb_mask = torch.split(orb_mask, data.node_counts.tolist(), dim=0) # shape: [natoms, nao_max]
         orb_mask_batch = []
         for idx in range(Nbatch):
             orb_mask_batch.append(orb_mask[idx].reshape(-1, 1)* orb_mask[idx].reshape(1, -1)) # shape: [natoms*nao_max, natoms*nao_max]
-        
+
         # set the number of valence electrons
         num_val = torch.zeros((99,)).type_as(data.z)
         for k in self.num_valence.keys():
             num_val[k] = self.num_valence[k]
         num_val = num_val[data.z] # shape: [Natoms]
         num_val = scatter(num_val, data.batch, dim=0) # shape: [Nbatch]
-                
+
         # Initialize band_num_win
         if self.band_num_control is not None:
             band_num_win = torch.zeros((99,)).type_as(data.z)
             for k in self.band_num_control.keys():
                 band_num_win[k] = self.band_num_control[k]
-            band_num_win = band_num_win[data.z] # shape: [Natoms,]   
+            band_num_win = band_num_win[data.z] # shape: [Natoms,]
             band_num_win = scatter(band_num_win, data.batch, dim=0) # shape: (Nbatch,)
-             
+
         # Separate Hon and Hoff for each batch
         node_counts = data.node_counts
         node_counts_shift = torch.cumsum(node_counts, dim=0) - node_counts
@@ -1407,7 +1397,7 @@ class HamGNN_out(nn.Module):
         if export_reciprocal_values:
             dSon_split = torch.split(data.dSon, node_counts.tolist(), dim=0)
             dSoff_split = torch.split(data.dSoff, edge_num.tolist(), dim=0)
-        
+
         band_energy = []
         wavefunction = []
         H_reciprocal = []
@@ -1416,15 +1406,15 @@ class HamGNN_out(nn.Module):
         dS_reciprocal = []
         gap = []
         for idx in range(Nbatch):
-            k_vec = data.k_vecs[idx]   
+            k_vec = data.k_vecs[idx]
             natoms = data.node_counts[idx]
-            
-            # Initialize HK and SK       
-            coe = torch.exp(2j*torch.pi*torch.sum(data.nbr_shift[edge_num_shift[idx]+torch.arange(edge_num[idx]).type_as(j),None,:]*k_vec[None,:,:], axis=-1)) # (nedges, 1, 3)*(1, num_k, 3) -> (nedges, num_k)     
-            
+
+            # Initialize HK and SK
+            coe = torch.exp(2j*torch.pi*torch.sum(data.nbr_shift[edge_num_shift[idx]+torch.arange(edge_num[idx]).type_as(j),None,:]*k_vec[None,:,:], axis=-1)) # (nedges, 1, 3)*(1, num_k, 3) -> (nedges, num_k)
+
             HK = torch.view_as_complex(torch.zeros((self.num_k, natoms, natoms, self.nao_max, self.nao_max, 2)).type_as(Hon))
-            SK = torch.view_as_complex(torch.zeros((self.num_k, natoms, natoms, self.nao_max, self.nao_max, 2)).type_as(Hon))  
-            SK_pred = torch.view_as_complex(torch.zeros((self.num_k, natoms, natoms, self.nao_max, self.nao_max, 2)).type_as(Hon))           
+            SK = torch.view_as_complex(torch.zeros((self.num_k, natoms, natoms, self.nao_max, self.nao_max, 2)).type_as(Hon))
+            SK_pred = torch.view_as_complex(torch.zeros((self.num_k, natoms, natoms, self.nao_max, self.nao_max, 2)).type_as(Hon))
             if export_reciprocal_values:
                 dSK = torch.view_as_complex(torch.zeros((self.num_k, natoms, natoms, self.nao_max, self.nao_max, 3, 2)).type_as(Hon))
 
@@ -1435,7 +1425,7 @@ class HamGNN_out(nn.Module):
             if export_reciprocal_values:
                 dSK[:,na,na,:,:,:] +=  dSon_split[idx].reshape(-1, self.nao_max, self.nao_max, 3)[None,na,:,:,:].type_as(dSK)
 
-            
+
             for iedge in range(edge_num[idx]):
                 # shape (num_k, nao_max, nao_max) += (num_k, 1, 1)*(1, nao_max, nao_max)
                 j_idx = j[edge_num_shift[idx]+iedge] - node_counts_shift[idx]
@@ -1443,7 +1433,7 @@ class HamGNN_out(nn.Module):
                 HK[:,j_idx,i_idx,:,:] += coe[iedge,:,None,None] * Hoff_split[idx].reshape(-1, self.nao_max, self.nao_max)[None,iedge,:,:]
                 SK[:,j_idx,i_idx,:,:] += coe[iedge,:,None,None] * Soff_split[idx].reshape(-1, self.nao_max, self.nao_max)[None,iedge,:,:]
                 SK_pred[:,j_idx,i_idx,:,:] += coe[iedge,:,None,None] * Soff_pred_split[idx].reshape(-1, self.nao_max, self.nao_max)[None,iedge,:,:]
-            
+
             if export_reciprocal_values:
                 for iedge in range(edge_num[idx]):
                     j_idx = j[edge_num_shift[idx]+iedge] - node_counts_shift[idx]
@@ -1459,12 +1449,12 @@ class HamGNN_out(nn.Module):
             if export_reciprocal_values:
                 dSK = torch.swapaxes(dSK,-3,-4) #(nk, natoms, nao_max, natoms, nao_max, 3)
                 dSK = dSK.reshape(-1, natoms*self.nao_max, natoms*self.nao_max, 3)
-            
+
             # mask HK and SK
             HK = torch.masked_select(HK, orb_mask_batch[idx].repeat(self.num_k,1,1) > 0)
             norbs = int(math.sqrt(HK.numel()/self.num_k))
             HK = HK.reshape(self.num_k, norbs, norbs)
-            
+
             SK = torch.masked_select(SK, orb_mask_batch[idx].repeat(self.num_k,1,1) > 0)
             norbs = int(math.sqrt(SK.numel()/self.num_k))
             SK = SK.reshape(self.num_k, norbs, norbs)
@@ -1472,22 +1462,22 @@ class HamGNN_out(nn.Module):
             SK_pred = torch.masked_select(SK_pred, orb_mask_batch[idx].repeat(self.num_k,1,1) > 0)
             norbs = int(math.sqrt(SK_pred.numel()/self.num_k))
             SK_pred = SK_pred.reshape(self.num_k, norbs, norbs)
-            
+
             if export_reciprocal_values:
                 dSK = torch.masked_select(dSK, orb_mask_batch[idx].unsqueeze(-1).repeat(self.num_k,1,1,3) > 0)
-                dSK = dSK.reshape(self.num_k, norbs, norbs, 3)            
-            
+                dSK = dSK.reshape(self.num_k, norbs, norbs, 3)
+
             # Calculate band energies
             L = torch.linalg.cholesky(SK)
             L_t = torch.transpose(L.conj(), dim0=-1, dim1=-2)
             L_inv = torch.linalg.inv(L)
             L_t_inv = torch.linalg.inv(L_t)
             Hs = torch.bmm(torch.bmm(L_inv, HK), L_t_inv)
-            orbital_energies, orbital_coefficients = torch.linalg.eigh(Hs)        
-            
+            orbital_energies, orbital_coefficients = torch.linalg.eigh(Hs)
+
             # Convert the wavefunction coefficients back to the original basis
             orbital_coefficients = torch.einsum('ijk, ika -> iaj', L_t_inv, orbital_coefficients)
-            
+
             # Numpy
             """
             HK_t = HK.detach().cpu().numpy()
@@ -1501,48 +1491,48 @@ class HamGNN_out(nn.Module):
                 eigen_vecs.append(v)
             eigen_vecs = np.array(eigen_vecs) # (nk, nbands, nbands)
             eigen_vecs = np.swapaxes(eigen_vecs, -1, -2)
-            
+
             lamda = np.einsum('nai, nij, naj -> na', np.conj(eigen_vecs), SK_t, eigen_vecs).real
             lamda = 1/np.sqrt(lamda) # shape: (numk, norbs)
-            eigen_vecs = eigen_vecs*lamda[:,:,None]  
+            eigen_vecs = eigen_vecs*lamda[:,:,None]
             orbital_energies, orbital_coefficients = torch.Tensor(eigen).type_as(data.pos), torch.complex(torch.Tensor(eigen_vecs.real), torch.Tensor(eigen_vecs.imag)).type_as(HK)
             """
-            
+
             if export_reciprocal_values:
                 # Normalize wave function
                 lamda = torch.einsum('nai, nij, naj -> na', torch.conj(orbital_coefficients), SK, orbital_coefficients).real
                 lamda = 1/torch.sqrt(lamda) # shape: (numk, norbs)
-                orbital_coefficients = orbital_coefficients*lamda.unsqueeze(-1)    
-                        
+                orbital_coefficients = orbital_coefficients*lamda.unsqueeze(-1)
+
                 H_reciprocal.append(HK)
                 S_reciprocal.append(SK_pred)
                 dS_reciprocal.append(dSK)
-            
+
             if self.band_num_control is not None:
                 orbital_energies = orbital_energies[:,:band_num_win[idx]]
-                orbital_coefficients = orbital_coefficients[:,:band_num_win[idx],:]                
+                orbital_coefficients = orbital_coefficients[:,:band_num_win[idx],:]
             band_energy.append(torch.transpose(orbital_energies, dim0=-1, dim1=-2)) # [shape:(Nbands, num_k)]
-            wavefunction.append(orbital_coefficients)  
-            H_sym.append(Hs.view(-1)) 
+            wavefunction.append(orbital_coefficients)
+            H_sym.append(Hs.view(-1))
             numc = math.ceil(num_val[idx]/2)
-            gap.append((torch.min(orbital_energies[:,numc]) - torch.max(orbital_energies[:,numc-1])).unsqueeze(0))    
-            
+            gap.append((torch.min(orbital_energies[:,numc]) - torch.max(orbital_energies[:,numc-1])).unsqueeze(0))
+
         band_energy = torch.cat(band_energy, dim=0) # [shape:(Nbands, num_k)]
-        
+
         gap = torch.cat(gap, dim=0)
-        
+
         if export_reciprocal_values:
             wavefunction = torch.stack(wavefunction, dim=0) # shape:[Nbatch, num_k, norbs, norbs]
             HK = torch.stack(H_reciprocal, dim=0) # shape:[Nbatch, num_k, norbs, norbs]
-            SK = torch.stack(S_reciprocal, dim=0) # shape:[Nbatch, num_k, norbs, norbs]  
-            dSK = torch.stack(dS_reciprocal, dim=0) # shape:[Nbatch, num_k, norbs, norbs, 3]   
+            SK = torch.stack(S_reciprocal, dim=0) # shape:[Nbatch, num_k, norbs, norbs]
+            dSK = torch.stack(dS_reciprocal, dim=0) # shape:[Nbatch, num_k, norbs, norbs, 3]
             return band_energy, wavefunction, HK, SK, dSK, gap
         else:
             wavefunction = [wavefunction[idx].reshape(-1) for idx in range(Nbatch)]
             wavefunction = torch.cat(wavefunction, dim=0) # shape:[Nbatch*num_k*norbs*norbs]
             H_sym = torch.cat(H_sym, dim=0) # shape:(Nbatch*num_k*norbs*norbs)
-            return band_energy, wavefunction, gap, H_sym   
-    
+            return band_energy, wavefunction, gap, H_sym
+
     def cal_band_energy(self, Hon, Hoff, data, export_reciprocal_values:bool=False):
         """
         Currently this function can only be used to calculate the energy band of the openmx Hamiltonian.
@@ -1550,34 +1540,34 @@ class HamGNN_out(nn.Module):
         j, i = data.edge_index
         cell = data.cell # shape:(Nbatch, 3, 3)
         Nbatch = cell.shape[0]
-        
+
         # parse the Atomic Orbital Basis Sets
         basis_definition = torch.zeros((99, self.nao_max)).type_as(data.z)
         # key is the atomic number, value is the index of the occupied orbits.
         for k in self.basis_def.keys():
             basis_definition[k][self.basis_def[k]] = 1
-            
-        orb_mask = basis_definition[data.z] # shape: [Natoms, nao_max] 
+
+        orb_mask = basis_definition[data.z] # shape: [Natoms, nao_max]
         orb_mask = torch.split(orb_mask, data.node_counts.tolist(), dim=0) # shape: [natoms, nao_max]
         orb_mask_batch = []
         for idx in range(Nbatch):
             orb_mask_batch.append(orb_mask[idx].reshape(-1, 1)* orb_mask[idx].reshape(1, -1)) # shape: [natoms*nao_max, natoms*nao_max]
-        
+
         # set the number of valence electrons
         num_val = torch.zeros((99,)).type_as(data.z)
         for k in self.num_valence.keys():
             num_val[k] = self.num_valence[k]
         num_val = num_val[data.z] # shape: [Natoms]
         num_val = scatter(num_val, data.batch, dim=0) # shape: [Nbatch]
-                
+
         # Initialize band_num_win
         if isinstance(self.band_num_control, dict):
             band_num_win = torch.zeros((99,)).type_as(data.z)
             for k in self.band_num_control.keys():
                 band_num_win[k] = self.band_num_control[k]
-            band_num_win = band_num_win[data.z] # shape: [Natoms,]   
-            band_num_win = scatter(band_num_win, data.batch, dim=0) # shape: (Nbatch,)   
-             
+            band_num_win = band_num_win[data.z] # shape: [Natoms,]
+            band_num_win = scatter(band_num_win, data.batch, dim=0) # shape: (Nbatch,)
+
         # Separate Hon and Hoff for each batch
         node_counts = data.node_counts
         node_counts_shift = torch.cumsum(node_counts, dim=0) - node_counts
@@ -1592,7 +1582,7 @@ class HamGNN_out(nn.Module):
         if export_reciprocal_values:
             dSon_split = torch.split(data.dSon, node_counts.tolist(), dim=0)
             dSoff_split = torch.split(data.dSoff, edge_num.tolist(), dim=0)
-        
+
         band_energy = []
         wavefunction = []
         H_reciprocal = []
@@ -1601,14 +1591,14 @@ class HamGNN_out(nn.Module):
         dS_reciprocal = []
         gap = []
         for idx in range(Nbatch):
-            k_vec = data.k_vecs[idx]   
+            k_vec = data.k_vecs[idx]
             natoms = data.node_counts[idx]
-            
-            # Initialize HK and SK       
-            coe = torch.exp(2j*torch.pi*torch.sum(data.nbr_shift[edge_num_shift[idx]+torch.arange(edge_num[idx]).type_as(j),None,:]*k_vec[None,:,:], axis=-1)) # (nedges, 1, 3)*(1, num_k, 3) -> (nedges, num_k)     
-            
+
+            # Initialize HK and SK
+            coe = torch.exp(2j*torch.pi*torch.sum(data.nbr_shift[edge_num_shift[idx]+torch.arange(edge_num[idx]).type_as(j),None,:]*k_vec[None,:,:], axis=-1)) # (nedges, 1, 3)*(1, num_k, 3) -> (nedges, num_k)
+
             HK = torch.view_as_complex(torch.zeros((self.num_k, natoms, natoms, self.nao_max, self.nao_max, 2)).type_as(Hon))
-            SK = torch.view_as_complex(torch.zeros((self.num_k, natoms, natoms, self.nao_max, self.nao_max, 2)).type_as(Hon))            
+            SK = torch.view_as_complex(torch.zeros((self.num_k, natoms, natoms, self.nao_max, self.nao_max, 2)).type_as(Hon))
             if export_reciprocal_values:
                 dSK = torch.view_as_complex(torch.zeros((self.num_k, natoms, natoms, self.nao_max, self.nao_max, 3, 2)).type_as(Hon))
 
@@ -1618,14 +1608,14 @@ class HamGNN_out(nn.Module):
             if export_reciprocal_values:
                 dSK[:,na,na,:,:,:] +=  dSon_split[idx].reshape(-1, self.nao_max, self.nao_max, 3)[None,na,:,:,:].type_as(dSK)
 
-            
+
             for iedge in range(edge_num[idx]):
                 # shape (num_k, nao_max, nao_max) += (num_k, 1, 1)*(1, nao_max, nao_max)
                 j_idx = j[edge_num_shift[idx]+iedge] - node_counts_shift[idx]
                 i_idx = i[edge_num_shift[idx]+iedge] - node_counts_shift[idx]
                 HK[:,j_idx,i_idx,:,:] += coe[iedge,:,None,None] * Hoff_split[idx].reshape(-1, self.nao_max, self.nao_max)[None,iedge,:,:]
                 SK[:,j_idx,i_idx,:,:] += coe[iedge,:,None,None] * Soff_split[idx].reshape(-1, self.nao_max, self.nao_max)[None,iedge,:,:]
-            
+
             if export_reciprocal_values:
                 for iedge in range(edge_num[idx]):
                     j_idx = j[edge_num_shift[idx]+iedge] - node_counts_shift[idx]
@@ -1639,30 +1629,30 @@ class HamGNN_out(nn.Module):
             if export_reciprocal_values:
                 dSK = torch.swapaxes(dSK,-3,-4) #(nk, natoms, nao_max, natoms, nao_max, 3)
                 dSK = dSK.reshape(-1, natoms*self.nao_max, natoms*self.nao_max, 3)
-            
+
             # mask HK and SK
             HK = torch.masked_select(HK, orb_mask_batch[idx].repeat(self.num_k,1,1) > 0)
             norbs = int(math.sqrt(HK.numel()/self.num_k))
             HK = HK.reshape(self.num_k, norbs, norbs)
-            
+
             SK = torch.masked_select(SK, orb_mask_batch[idx].repeat(self.num_k,1,1) > 0)
             norbs = int(math.sqrt(SK.numel()/self.num_k))
             SK = SK.reshape(self.num_k, norbs, norbs)
             if export_reciprocal_values:
                 dSK = torch.masked_select(dSK, orb_mask_batch[idx].unsqueeze(-1).repeat(self.num_k,1,1,3) > 0)
-                dSK = dSK.reshape(self.num_k, norbs, norbs, 3)            
-            
+                dSK = dSK.reshape(self.num_k, norbs, norbs, 3)
+
             # Calculate band energies
             L = torch.linalg.cholesky(SK)
             L_t = torch.transpose(L.conj(), dim0=-1, dim1=-2)
             L_inv = torch.linalg.inv(L)
             L_t_inv = torch.linalg.inv(L_t)
             Hs = torch.bmm(torch.bmm(L_inv, HK), L_t_inv)
-            orbital_energies, orbital_coefficients = torch.linalg.eigh(Hs)        
-            
+            orbital_energies, orbital_coefficients = torch.linalg.eigh(Hs)
+
             # Convert the wavefunction coefficients back to the original basis
             orbital_coefficients = torch.einsum('ijk, ika -> iaj', L_t_inv, orbital_coefficients)
-            
+
             # Numpy
             """
             HK_t = HK.detach().cpu().numpy()
@@ -1676,56 +1666,56 @@ class HamGNN_out(nn.Module):
                 eigen_vecs.append(v)
             eigen_vecs = np.array(eigen_vecs) # (nk, nbands, nbands)
             eigen_vecs = np.swapaxes(eigen_vecs, -1, -2)
-            
+
             lamda = np.einsum('nai, nij, naj -> na', np.conj(eigen_vecs), SK_t, eigen_vecs).real
             lamda = 1/np.sqrt(lamda) # shape: (numk, norbs)
-            eigen_vecs = eigen_vecs*lamda[:,:,None]  
+            eigen_vecs = eigen_vecs*lamda[:,:,None]
             orbital_energies, orbital_coefficients = torch.Tensor(eigen).type_as(data.pos), torch.complex(torch.Tensor(eigen_vecs.real), torch.Tensor(eigen_vecs.imag)).type_as(HK)
             """
-            
+
             if export_reciprocal_values:
                 # Normalize wave function
                 lamda = torch.einsum('nai, nij, naj -> na', torch.conj(orbital_coefficients), SK, orbital_coefficients).real
                 lamda = 1/torch.sqrt(lamda) # shape: (numk, norbs)
-                orbital_coefficients = orbital_coefficients*lamda.unsqueeze(-1)    
-                        
+                orbital_coefficients = orbital_coefficients*lamda.unsqueeze(-1)
+
                 H_reciprocal.append(HK)
                 S_reciprocal.append(SK)
                 dS_reciprocal.append(dSK)
-            
+
             numc = math.ceil(num_val[idx]/2)
             gap.append((torch.min(orbital_energies[:,numc]) - torch.max(orbital_energies[:,numc-1])).unsqueeze(0))
             if self.band_num_control is not None:
                 if isinstance(self.band_num_control, dict):
-                    orbital_energies = orbital_energies[:,:band_num_win[idx]]   
+                    orbital_energies = orbital_energies[:,:band_num_win[idx]]
                     orbital_coefficients = orbital_coefficients[:,:band_num_win[idx],:]
                 else:
                     if isinstance(self.band_num_control, float):
                         self.band_num_control = max([1, int(self.band_num_control*numc)])
                     else:
                         self.band_num_control = min([self.band_num_control, numc])
-                    orbital_energies = orbital_energies[:,numc-self.band_num_control:numc+self.band_num_control]   
-                    orbital_coefficients = orbital_coefficients[:,numc-self.band_num_control:numc+self.band_num_control,:]               
+                    orbital_energies = orbital_energies[:,numc-self.band_num_control:numc+self.band_num_control]
+                    orbital_coefficients = orbital_coefficients[:,numc-self.band_num_control:numc+self.band_num_control,:]
             band_energy.append(torch.transpose(orbital_energies, dim0=-1, dim1=-2)) # [shape:(Nbands, num_k)]
-            wavefunction.append(orbital_coefficients)  
-            H_sym.append(Hs.view(-1))   
-            
+            wavefunction.append(orbital_coefficients)
+            H_sym.append(Hs.view(-1))
+
         band_energy = torch.cat(band_energy, dim=0) # [shape:(Nbands, num_k)]
-        
+
         gap = torch.cat(gap, dim=0)
-        
+
         if export_reciprocal_values:
             wavefunction = torch.stack(wavefunction, dim=0) # shape:[Nbatch, num_k, norbs, norbs]
             HK = torch.stack(H_reciprocal, dim=0) # shape:[Nbatch, num_k, norbs, norbs]
-            SK = torch.stack(S_reciprocal, dim=0) # shape:[Nbatch, num_k, norbs, norbs]  
-            dSK = torch.stack(dS_reciprocal, dim=0) # shape:[Nbatch, num_k, norbs, norbs, 3]   
+            SK = torch.stack(S_reciprocal, dim=0) # shape:[Nbatch, num_k, norbs, norbs]
+            dSK = torch.stack(dS_reciprocal, dim=0) # shape:[Nbatch, num_k, norbs, norbs, 3]
             return band_energy, wavefunction, HK, SK, dSK, gap
         else:
             wavefunction = [wavefunction[idx].reshape(-1) for idx in range(Nbatch)]
             wavefunction = torch.cat(wavefunction, dim=0) # shape:[Nbatch*num_k*norbs*norbs]
             H_sym = torch.cat(H_sym, dim=0) # shape:(Nbatch*num_k*norbs*norbs)
-            return band_energy, wavefunction, gap, H_sym  
-    
+            return band_energy, wavefunction, gap, H_sym
+
     def cal_band_energy_soc(self, Hsoc_on_real, Hsoc_on_imag, Hsoc_off_real, Hsoc_off_imag, data):
         """
         Currently this function can only be used to calculate the energy band of the openmx Hamiltonian.
@@ -1733,39 +1723,39 @@ class HamGNN_out(nn.Module):
         j, i = data.edge_index
         cell = data.cell # shape:(Nbatch, 3, 3)
         Nbatch = cell.shape[0]
-        
+
         Hsoc_on_real = Hsoc_on_real.reshape(-1, 2*self.nao_max, 2*self.nao_max)
         Hsoc_on_imag = Hsoc_on_imag.reshape(-1, 2*self.nao_max, 2*self.nao_max)
-        Hsoc_off_real = Hsoc_off_real.reshape(-1, 2*self.nao_max, 2*self.nao_max) 
+        Hsoc_off_real = Hsoc_off_real.reshape(-1, 2*self.nao_max, 2*self.nao_max)
         Hsoc_off_imag = Hsoc_off_imag.reshape(-1, 2*self.nao_max, 2*self.nao_max)
-        
+
         # parse the Atomic Orbital Basis Sets
         basis_definition = torch.zeros((99, self.nao_max)).type_as(data.z)
         # key is the atomic number, value is the index of the occupied orbits.
         for k in self.basis_def.keys():
             basis_definition[k][self.basis_def[k]] = 1
-            
-        orb_mask = basis_definition[data.z] # shape: [Natoms, nao_max] 
+
+        orb_mask = basis_definition[data.z] # shape: [Natoms, nao_max]
         orb_mask = torch.split(orb_mask, data.node_counts.tolist(), dim=0) # shape: [natoms, nao_max]
         orb_mask_batch = []
         for idx in range(Nbatch):
             orb_mask_batch.append(orb_mask[idx].reshape(-1, 1)* orb_mask[idx].reshape(1, -1)) # shape: [natoms*nao_max, natoms*nao_max]
-        
+
         # Set the number of valence electrons
         num_val = torch.zeros((99,)).type_as(data.z)
         for k in self.num_valence.keys():
             num_val[k] = self.num_valence[k]
         num_val = num_val[data.z] # shape: [Natoms]
         num_val = scatter(num_val, data.batch, dim=0) # shape: [Nbatch]
-                
+
         # Initialize band_num_win
         if isinstance(self.band_num_control, dict):
             band_num_win = torch.zeros((99,)).type_as(data.z)
             for k in self.band_num_control.keys():
                 band_num_win[k] = self.band_num_control[k]
-            band_num_win = band_num_win[data.z] # shape: [Natoms,]   
-            band_num_win = scatter(band_num_win, data.batch, dim=0) # shape: (Nbatch,)       
-            
+            band_num_win = band_num_win[data.z] # shape: [Natoms,]
+            band_num_win = scatter(band_num_win, data.batch, dim=0) # shape: (Nbatch,)
+
         # Separate Hon and Hoff for each batch
         node_counts = data.node_counts
         Hon_split = torch.split(Hsoc_on_real, node_counts.tolist(), dim=0)
@@ -1777,19 +1767,19 @@ class HamGNN_out(nn.Module):
         Hoff_split = torch.split(Hsoc_off_real, edge_num.tolist(), dim=0)
         iHoff_split = torch.split(Hsoc_off_imag, edge_num.tolist(), dim=0)
         Soff_split = torch.split(data.Soff.reshape(-1, self.nao_max, self.nao_max), edge_num.tolist(), dim=0)
-        
+
         cell_shift_split = torch.split(data.cell_shift, edge_num.tolist(), dim=0)
         nbr_shift_split = torch.split(data.nbr_shift, edge_num.tolist(), dim=0)
         edge_index_split = torch.split(data.edge_index, edge_num.tolist(), dim=1)
         node_num = torch.cumsum(node_counts, dim=0) - node_counts
         edge_index_split = [edge_index_split[idx]-node_num[idx] for idx in range(len(node_num))]
-        
+
         band_energy = []
         wavefunction = []
         for idx in range(Nbatch):
-            k_vec = data.k_vecs[idx]   
-            natoms = data.node_counts[idx].item() 
-            
+            k_vec = data.k_vecs[idx]
+            natoms = data.node_counts[idx].item()
+
             # Initialize cell index
             cell_shift_tuple = [tuple(c) for c in cell_shift_split[idx].detach().cpu().tolist()]
             cell_shift_set = set(cell_shift_tuple)
@@ -1797,7 +1787,7 @@ class HamGNN_out(nn.Module):
             cell_index = [cell_shift_list.index(icell) for icell in cell_shift_tuple]
             cell_index = torch.LongTensor(cell_index).type_as(data.edge_index)
             ncells = len(cell_shift_set)
-            
+
             # Initialize SK
             phase = torch.view_as_complex(torch.zeros((self.num_k, ncells, 2)).type_as(data.Son))
             phase[:, cell_index] = torch.exp(2j*torch.pi*torch.sum(nbr_shift_split[idx][None,:,:]*k_vec[:,None,:], dim=-1))
@@ -1815,9 +1805,9 @@ class HamGNN_out(nn.Module):
             SK = SK.reshape(self.num_k, norbs, norbs)
             I = torch.eye(2).type_as(data.Hon)
             SK = torch.kron(I, SK)
-            
+
             # Initialize Hsoc
-            # on-site term 
+            # on-site term
             H11 = Hon_split[idx][:,:self.nao_max,:self.nao_max] + 1.0j*iHon_split[idx][:,:self.nao_max,:self.nao_max] # up-up
             H12 = Hon_split[idx][:,:self.nao_max, self.nao_max:] + 1.0j*iHon_split[idx][:,:self.nao_max,self.nao_max:] # up-down
             H21 = Hon_split[idx][:,self.nao_max:,:self.nao_max] + 1.0j*iHon_split[idx][:,self.nao_max:,:self.nao_max] # down-up
@@ -1829,12 +1819,12 @@ class HamGNN_out(nn.Module):
             H21 = Hoff_split[idx][:,self.nao_max:,:self.nao_max] + 1.0j*iHoff_split[idx][:,self.nao_max:,:self.nao_max] # down-up
             H22 = Hoff_split[idx][:,self.nao_max:,self.nao_max:] + 1.0j*iHoff_split[idx][:,self.nao_max:,self.nao_max:] # down-down
             Hoff_soc = [H11, H12, H21, H22]
-            
+
             # Initialize HK
             HK_list = []
             for Hon, Hoff in zip(Hon_soc, Hoff_soc):
                 H_cell = torch.view_as_complex(torch.zeros((ncells, natoms, natoms, self.nao_max, self.nao_max, 2)).type_as(data.Son))
-                H_cell[cell_index, edge_index_split[idx][0], edge_index_split[idx][1], :, :] += Hoff    
+                H_cell[cell_index, edge_index_split[idx][0], edge_index_split[idx][1], :, :] += Hoff
 
                 HK = torch.einsum('ijklm, ni->njklm', H_cell, phase) # (nk, natoms, natoms, nao_max, nao_max)
                 HK[:,na,na,:,:] +=  Hon[None,na,:,:] # shape (nk, natoms, nao_max, nao_max)
@@ -1846,63 +1836,63 @@ class HamGNN_out(nn.Module):
                 HK = HK[:, orb_mask_batch[idx] > 0]
                 norbs = int(math.sqrt(HK.numel()/self.num_k))
                 HK = HK.reshape(self.num_k, norbs, norbs)
-        
+
                 HK_list.append(HK)
 
             HK = torch.cat([torch.cat([HK_list[0],HK_list[1]], dim=-1), torch.cat([HK_list[2],HK_list[3]], dim=-1)],dim=-2)
-        
+
             # Calculate band energies
             L = torch.linalg.cholesky(SK)
             L_t = torch.transpose(L.conj(), dim0=-1, dim1=-2)
             L_inv = torch.linalg.inv(L)
             L_t_inv = torch.linalg.inv(L_t)
             Hs = torch.bmm(torch.bmm(L_inv, HK), L_t_inv)
-            orbital_energies, orbital_coefficients = torch.linalg.eigh(Hs)   
+            orbital_energies, orbital_coefficients = torch.linalg.eigh(Hs)
             # Convert the wavefunction coefficients back to the original basis
             orbital_coefficients = torch.bmm(L_t_inv, orbital_coefficients) # shape:(num_k, Nbands, Nbands)
             if self.band_num_control is not None:
                 if isinstance(self.band_num_control, dict):
-                    orbital_energies = orbital_energies[:,:band_num_win[idx]]   
+                    orbital_energies = orbital_energies[:,:band_num_win[idx]]
                     orbital_coefficients = orbital_coefficients[:,:band_num_win[idx],:]
                 else:
-                    orbital_energies = orbital_energies[:,num_val[idx]-self.band_num_control:num_val[idx]+self.band_num_control]   
+                    orbital_energies = orbital_energies[:,num_val[idx]-self.band_num_control:num_val[idx]+self.band_num_control]
                     orbital_coefficients = orbital_coefficients[:,num_val[idx]-self.band_num_control:num_val[idx]+self.band_num_control,:]
             band_energy.append(torch.transpose(orbital_energies, dim0=-1, dim1=-2)) # [shape:(Nbands, num_k)]
             wavefunction.append(orbital_coefficients)
         return torch.cat(band_energy, dim=0), torch.cat(wavefunction, dim=0).reshape(-1)
-    
+
     def mask_Ham(self, Hon, Hoff, data):
         # parse the Atomic Orbital Basis Sets
         basis_definition = torch.zeros((99, self.nao_max)).type_as(data.z)
         # key is the atomic number, value is the index of the occupied orbits.
         for k in self.basis_def.keys():
             basis_definition[k][self.basis_def[k]] = 1
-        
-        # mask Hon first        
-        orb_mask = basis_definition[data.z].view(-1, self.nao_max) # shape: [Natoms, nao_max] 
+
+        # mask Hon first
+        orb_mask = basis_definition[data.z].view(-1, self.nao_max) # shape: [Natoms, nao_max]
         orb_mask = orb_mask[:,:,None] * orb_mask[:,None,:]       # shape: [Natoms, nao_max, nao_max]
         orb_mask = orb_mask.reshape(-1, int(self.nao_max*self.nao_max)) # shape: [Natoms, nao_max*nao_max]
-        
+
         Hon_mask = torch.zeros_like(Hon)
         Hon_mask[orb_mask>0] = Hon[orb_mask>0]
-        
+
         # mask Hoff
-        j, i = data.edge_index        
+        j, i = data.edge_index
         orb_mask_j = basis_definition[data.z[j]].view(-1, self.nao_max) # shape: [Nedges, nao_max]
-        orb_mask_i = basis_definition[data.z[i]].view(-1, self.nao_max) # shape: [Nedges, nao_max] 
+        orb_mask_i = basis_definition[data.z[i]].view(-1, self.nao_max) # shape: [Nedges, nao_max]
         orb_mask = orb_mask_j[:,:,None] * orb_mask_i[:,None,:]       # shape: [Nedges, nao_max, nao_max]
         orb_mask = orb_mask.reshape(-1, int(self.nao_max*self.nao_max)) # shape: [Nedges, nao_max*nao_max]
-        
+
         Hoff_mask = torch.zeros_like(Hoff)
         Hoff_mask[orb_mask>0] = Hoff[orb_mask>0]
-        
-        return Hon_mask, Hoff_mask    
-    
+
+        return Hon_mask, Hoff_mask
+
     def construct_Hsoc(self, H, iH):
         Hsoc = torch.view_as_complex(torch.zeros((H.shape[0], (2*self.nao_max)**2, 2)).type_as(H))
         Hsoc = H + 1.0j*iH
         return Hsoc
-    
+
     def reduce(self, coefficient):
         if self.nao_max == 14:
             coefficient = coefficient.reshape(coefficient.shape[0], self.nao_max, self.nao_max)
@@ -1913,7 +1903,7 @@ class HamGNN_out(nn.Module):
             coefficient[:, :, 3:6] = torch.mean(coefficient[:, :, 3:6], dim=2, keepdim=True).expand(coefficient.shape[0], self.nao_max, 3)
             coefficient[:, :, 6:9] = torch.mean(coefficient[:, :, 6:9], dim=2, keepdim=True).expand(coefficient.shape[0], self.nao_max, 3)
             coefficient[:, :, 9:14] = torch.mean(coefficient[:, :, 9:14], dim=2, keepdim=True).expand(coefficient.shape[0], self.nao_max, 5)
-            
+
         elif self.nao_max == 19:
             coefficient = coefficient.reshape(coefficient.shape[0], self.nao_max, self.nao_max)
             coefficient[:, 3:6] = torch.mean(coefficient[:, 3:6], dim=1, keepdim=True).expand(coefficient.shape[0], 3, self.nao_max)
@@ -1940,130 +1930,130 @@ class HamGNN_out(nn.Module):
             coefficient[:, :, 14:19] = torch.mean(coefficient[:, :, 14:19], dim=2, keepdim=True).expand(coefficient.shape[0], self.nao_max, 5)
             coefficient[:, :, 19:26] = torch.mean(coefficient[:, :, 19:26], dim=2, keepdim=True).expand(coefficient.shape[0], self.nao_max, 7)
         return coefficient.view(coefficient.shape[0], -1)
-         
+
     def forward(self, data, graph_representation: dict = None):
         # prepare data.hamiltonian & data.overlap
         if 'hamiltonian' not in data:
             data.hamiltonian = torch.cat([data.Hon, data.Hoff], dim=0)
         if 'overlap' not in data:
             data.overlap = torch.cat([data.Son, data.Soff], dim=0)
-        
+
         node_attr = graph_representation['node_attr']
         edge_attr = graph_representation['edge_attr']  # mji
         j, i = data.edge_index
-        
+
         # Calculate inv_edge_index in batch
         inv_edge_idx = data.inv_edge_idx
         edge_num = torch.ones_like(j)
         edge_num = scatter(edge_num, data.batch[j], dim=0)
         edge_num = torch.cumsum(edge_num, dim=0) - edge_num
         inv_edge_idx = inv_edge_idx + edge_num[data.batch[j]]
-        
-        # Calculate the on-site Hamiltonian 
-        self.ham_irreps_dim = self.ham_irreps_dim.type_as(j)  
-        
+
+        # Calculate the on-site Hamiltonian
+        self.ham_irreps_dim = self.ham_irreps_dim.type_as(j)
+
         if not self.ham_only:
             node_sph = self.onsitenet_s(node_attr)
             node_sph = torch.split(node_sph, self.ham_irreps_dim.tolist(), dim=-1)
             Son = self.matrix_merge(node_sph) # shape (Nnodes, nao_max**2)
-            
+
             Son = self.change_index(Son)
-        
+
             # Impose Hermitian symmetry for Son
             Son = self.symmetrize_Hon(Son)
 
             # Calculate the off-site overlap
-            # Calculate the contribution of the edges       
+            # Calculate the contribution of the edges
             edge_sph = self.offsitenet_s(edge_attr)
-            edge_sph = torch.split(edge_sph, self.ham_irreps_dim.tolist(), dim=-1)        
+            edge_sph = torch.split(edge_sph, self.ham_irreps_dim.tolist(), dim=-1)
             Soff = self.matrix_merge(edge_sph)
-        
-            Soff = self.change_index(Soff)        
+
+            Soff = self.change_index(Soff)
             # Impose Hermitian symmetry for Soff
             Soff = self.symmetrize_Hoff(Soff, inv_edge_idx)
-        
+
             if self.ham_type in ['openmx','pasp', 'siesta', 'abacus']:
                 Son, Soff = self.mask_Ham(Son, Soff, data)
 
         if self.soc_switch:
-            node_sph = self.onsitenet_residual(node_attr)     
-            node_sph = self.onsitenet_linear(node_sph) 
+            node_sph = self.onsitenet_residual(node_attr)
+            node_sph = self.onsitenet_linear(node_sph)
             node_sph = torch.split(node_sph, self.ham_irreps_dim.tolist(), dim=-1)
             Hon = self.matrix_merge(node_sph) # shape (Nnodes, nao_max**2)
-            
+
             Hon = self.change_index(Hon)
 
             # Impose Hermitian symmetry for Hon
-            Hon = self.symmetrize_Hon(Hon)            
-               
+            Hon = self.symmetrize_Hon(Hon)
+
             # Calculate the off-site Hamiltonian
-            # Calculate the contribution of the edges       
+            # Calculate the contribution of the edges
             edge_sph = self.offsitenet_residual(edge_attr)
             edge_sph = self.offsitenet_linear(edge_sph)
-            edge_sph = torch.split(edge_sph, self.ham_irreps_dim.tolist(), dim=-1)        
+            edge_sph = torch.split(edge_sph, self.ham_irreps_dim.tolist(), dim=-1)
             Hoff = self.matrix_merge(edge_sph)
-        
-            Hoff = self.change_index(Hoff)        
+
+            Hoff = self.change_index(Hoff)
             # Impose Hermitian symmetry for Hoff
             Hoff = self.symmetrize_Hoff(Hoff, inv_edge_idx)
-            
+
             Hon, Hoff = self.mask_Ham(Hon, Hoff, data)
-            
+
             # build Hsoc
             node_sph = self.onsitenet_residual_ksi(node_attr)
             ksi_on = self.ksi_on_scalar(node_sph)
             ksi_on = self.reduce(ksi_on)
-            
+
             edge_sph = self.offsitenet_residual_ksi(edge_attr)
             ksi_off = self.ksi_off_scalar(edge_sph)
-            ksi_off = self.reduce(ksi_off)  
-            
+            ksi_off = self.reduce(ksi_off)
+
             Hsoc_on_real = torch.zeros((Hon.shape[0], 2*self.nao_max, 2*self.nao_max)).type_as(Hon)
             Hsoc_on_real[:,:self.nao_max,:self.nao_max] = Hon.reshape(-1, self.nao_max, self.nao_max)
             Hsoc_on_real[:,:self.nao_max,self.nao_max:] = self.symmetrize_Hon((ksi_on*data.Lon[:,:,1]), sign='-').reshape(-1, self.nao_max, self.nao_max)
             Hsoc_on_real[:,self.nao_max:,:self.nao_max] = self.symmetrize_Hon((ksi_on*data.Lon[:,:,1]), sign='-').reshape(-1, self.nao_max, self.nao_max)
             Hsoc_on_real[:,self.nao_max:,self.nao_max:] = Hon.reshape(-1, self.nao_max, self.nao_max)
             Hsoc_on_real = Hsoc_on_real.reshape(-1, (2*self.nao_max)**2)
-            
+
             Hsoc_on_imag = torch.zeros((Hon.shape[0], 2*self.nao_max, 2*self.nao_max)).type_as(Hon)
             Hsoc_on_imag[:,:self.nao_max,:self.nao_max] = self.symmetrize_Hon((ksi_on*data.Lon[:,:,2]), sign='-').reshape(-1, self.nao_max, self.nao_max)
             Hsoc_on_imag[:,:self.nao_max, self.nao_max:] = self.symmetrize_Hon((ksi_on*data.Lon[:,:,0]), sign='-').reshape(-1, self.nao_max, self.nao_max)
             Hsoc_on_imag[:,self.nao_max:,:self.nao_max] = -self.symmetrize_Hon((ksi_on*data.Lon[:,:,0]), sign='-').reshape(-1, self.nao_max, self.nao_max)
             Hsoc_on_imag[:,self.nao_max:,self.nao_max:] = -self.symmetrize_Hon((ksi_on*data.Lon[:,:,2]), sign='-').reshape(-1, self.nao_max, self.nao_max)
             Hsoc_on_imag = Hsoc_on_imag.reshape(-1, (2*self.nao_max)**2)
-            
+
             Hsoc_off_real = torch.zeros((Hoff.shape[0], 2*self.nao_max, 2*self.nao_max)).type_as(Hoff)
             Hsoc_off_real[:,:self.nao_max,:self.nao_max] = Hoff.reshape(-1, self.nao_max, self.nao_max)
             Hsoc_off_real[:,:self.nao_max,self.nao_max:] = self.symmetrize_Hoff((ksi_off*data.Loff[:,:,1]), inv_edge_idx, sign='-').reshape(-1, self.nao_max, self.nao_max)
             Hsoc_off_real[:,self.nao_max:,:self.nao_max] = self.symmetrize_Hoff((ksi_off*data.Loff[:,:,1]), inv_edge_idx, sign='-').reshape(-1, self.nao_max, self.nao_max)
             Hsoc_off_real[:,self.nao_max:,self.nao_max:] = Hoff.reshape(-1, self.nao_max, self.nao_max)
             Hsoc_off_real = Hsoc_off_real.reshape(-1, (2*self.nao_max)**2)
-            
+
             Hsoc_off_imag = torch.zeros((Hoff.shape[0], 2*self.nao_max, 2*self.nao_max)).type_as(Hoff)
             Hsoc_off_imag[:,:self.nao_max,:self.nao_max] = self.symmetrize_Hoff((ksi_off*data.Loff[:,:,2]), inv_edge_idx, sign='-').reshape(-1, self.nao_max, self.nao_max)
             Hsoc_off_imag[:,:self.nao_max, self.nao_max:] = self.symmetrize_Hoff((ksi_off*data.Loff[:,:,0]), inv_edge_idx, sign='-').reshape(-1, self.nao_max, self.nao_max)
             Hsoc_off_imag[:,self.nao_max:,:self.nao_max] = -self.symmetrize_Hoff((ksi_off*data.Loff[:,:,0]), inv_edge_idx, sign='-').reshape(-1, self.nao_max, self.nao_max)
             Hsoc_off_imag[:,self.nao_max:,self.nao_max:] = -self.symmetrize_Hoff((ksi_off*data.Loff[:,:,2]), inv_edge_idx, sign='-').reshape(-1, self.nao_max, self.nao_max)
             Hsoc_off_imag = Hsoc_off_imag.reshape(-1, (2*self.nao_max)**2)
-            
+
             if self.add_H0:
                 Hsoc_on_real =  Hsoc_on_real + data.Hon0
                 Hsoc_off_real = Hsoc_off_real + data.Hoff0
                 Hsoc_on_imag = Hsoc_on_imag + data.iHon0
                 Hsoc_off_imag = Hsoc_off_imag + data.iHoff0
-            
+
             Hsoc_real = self.cat_onsite_and_offsite(data, Hsoc_on_real, Hsoc_off_real)
             Hsoc_imag = self.cat_onsite_and_offsite(data, Hsoc_on_imag, Hsoc_off_imag)
-            
+
             data.hamiltonian_real = self.cat_onsite_and_offsite(data, data.Hon, data.Hoff)
             data.hamiltonian_imag = self.cat_onsite_and_offsite(data, data.iHon, data.iHoff)
-            
+
             #Hsoc = self.construct_Hsoc(Hsoc_real, Hsoc_imag)
             #data.hamiltonian = self.construct_Hsoc(data.hamiltonian_real, data.hamiltonian_imag)
-            
+
             Hsoc = torch.cat((Hsoc_real, Hsoc_imag), dim=0)
             data.hamiltonian = torch.cat((data.hamiltonian_real, data.hamiltonian_imag), dim=0)
-            
+
             if self.calculate_band_energy:
                 k_vecs = []
                 for idx in range(data.batch[-1]+1):
@@ -2078,43 +2068,43 @@ class HamGNN_out(nn.Module):
                     k_vec = k_vec.dot(lat_per_inv[np.newaxis,:,:]) # shape (nk,1,3)
                     k_vec = k_vec.reshape(-1,3) # shape (nk, 3)
                     k_vec = torch.Tensor(k_vec).type_as(Hon)
-                    k_vecs.append(k_vec)  
+                    k_vecs.append(k_vec)
                 data.k_vecs = torch.stack(k_vecs, dim=0)
-                band_energy, wavefunction = self.cal_band_energy_soc(Hsoc_on_real, Hsoc_on_imag, Hsoc_off_real, Hsoc_off_imag, data) 
+                band_energy, wavefunction = self.cal_band_energy_soc(Hsoc_on_real, Hsoc_on_imag, Hsoc_off_real, Hsoc_off_imag, data)
                 with torch.no_grad():
                     data.band_energy, data.wavefunction = self.cal_band_energy_soc(data.Hon, data.iHon, data.Hoff, data.iHoff, data)
             else:
                 band_energy = None
                 wavefunction = None
-        else:                
+        else:
             node_sph = self.onsitenet_residual(node_attr)
-            node_sph = self.onsitenet_linear(node_sph) 
+            node_sph = self.onsitenet_linear(node_sph)
             node_sph = torch.split(node_sph, self.ham_irreps_dim.tolist(), dim=-1)
             Hon = self.matrix_merge(node_sph) # shape (Nnodes, nao_max**2)
-            
+
             Hon = self.change_index(Hon)
-        
+
             # Impose Hermitian symmetry for Hon
             Hon = self.symmetrize_Hon(Hon)
             if self.add_H0:
                 Hon = Hon + data.Hon0
-               
+
             # Calculate the off-site Hamiltonian
-            # Calculate the contribution of the edges       
+            # Calculate the contribution of the edges
             edge_sph = self.offsitenet_residual(edge_attr)
             edge_sph = self.offsitenet_linear(edge_sph)
-            edge_sph = torch.split(edge_sph, self.ham_irreps_dim.tolist(), dim=-1)        
+            edge_sph = torch.split(edge_sph, self.ham_irreps_dim.tolist(), dim=-1)
             Hoff = self.matrix_merge(edge_sph)
-        
-            Hoff = self.change_index(Hoff)        
+
+            Hoff = self.change_index(Hoff)
             # Impose Hermitian symmetry for Hoff
             Hoff = self.symmetrize_Hoff(Hoff, inv_edge_idx)
             if self.add_H0:
                 Hoff = Hoff + data.Hoff0
-        
+
             if self.ham_type in ['openmx','pasp', 'siesta', 'abacus']:
                 Hon, Hoff = self.mask_Ham(Hon, Hoff, data)
-        
+
             if self.calculate_band_energy:
                 k_vecs = []
                 for idx in range(data.batch[-1]+1):
@@ -2134,7 +2124,7 @@ class HamGNN_out(nn.Module):
                         klabels = []
                         for lbs in kpath_seek.kpath['path']:
                             klabels += lbs
-                        # remove adjacent duplicates   
+                        # remove adjacent duplicates
                         res = [klabels[0]]
                         [res.append(x) for x in klabels[1:] if x != res[-1]]
                         klabels = res
@@ -2151,7 +2141,7 @@ class HamGNN_out(nn.Module):
                     k_vec = k_vec.dot(lat_per_inv[np.newaxis,:,:]) # shape (nk,1,3)
                     k_vec = k_vec.reshape(-1,3) # shape (nk, 3)
                     k_vec = torch.Tensor(k_vec).type_as(Hon)
-                    k_vecs.append(k_vec)  
+                    k_vecs.append(k_vec)
                 data.k_vecs = torch.stack(k_vecs, dim=0)
                 if self.export_reciprocal_values:
                     if self.ham_only:
@@ -2169,13 +2159,13 @@ class HamGNN_out(nn.Module):
                 wavefunction = None
                 gap = None
                 H_sym = None
-        
+
         # Combining on-site and off-site Hamiltonians
         # openmx
         if self.ham_type in ['openmx','pasp', 'siesta', 'abacus']:
             if self.soc_switch:
-                result = {'hamiltonian': Hsoc, 'hamiltonian_real':Hsoc_real, 
-                          'hamiltonian_imag':Hsoc_imag, 'band_energy': band_energy, 
+                result = {'hamiltonian': Hsoc, 'hamiltonian_real':Hsoc_real,
+                          'hamiltonian_imag':Hsoc_imag, 'band_energy': band_energy,
                           'wavefunction': wavefunction, 'iHon': Hsoc_on_imag, 'iHoff': Hsoc_off_imag}
             else:
                 H = self.cat_onsite_and_offsite(data, Hon, Hoff)
@@ -2184,13 +2174,13 @@ class HamGNN_out(nn.Module):
                     result.update({'HK':HK, 'SK':SK, 'dSK': dSK})
         else:
             raise NotImplementedError
-        
-        if not self.ham_only:                
+
+        if not self.ham_only:
             # openmx
             if self.ham_type in ['openmx','pasp', 'siesta','abacus']:
                 S = self.cat_onsite_and_offsite(data, Son, Soff)
             else:
                 raise NotImplementedError
             result.update({'overlap': S})
-        
+
         return result
